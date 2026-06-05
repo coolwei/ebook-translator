@@ -35,3 +35,6 @@ env/
 .vscode/
 .idea/
 *.swp
+
+# Agent workspace
+.sisyphus/
