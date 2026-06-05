@@ -50,6 +50,18 @@ TRANSLATION_API_KEY=sk-your-api-key
 ebook-translator inspect --config config.yaml
 ```
 
+### 估算成本與時間（不呼叫 API）
+
+在翻譯前估算請求數、token 粗估、RPM 下限時間與風險，不會呼叫任何 provider：
+
+```bash
+ebook-translator estimate --config config.yaml
+```
+
+輸出 console 摘要並寫入 `outputs/<書名>/estimate_report.json`。token 為粗估
+（mixed 文字 `字元數 / 3`，output ≈ input × 0.8），結構保留未來替換真實 tokenizer 的空間。
+若有段落超過 `limits.max_chars_per_chunk`、預估時間過長或書籍過大，會列出對應 warning。
+
 ### 翻譯
 
 ```bash

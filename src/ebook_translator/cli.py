@@ -86,6 +86,22 @@ def inspect(
 
 
 @app.command()
+def estimate(
+    config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
+) -> None:
+    """Estimate translation cost, requests, tokens, and runtime (no API calls)."""
+    from .estimate import run_estimate
+
+    # Estimation never calls a provider, so no API key is required.
+    cfg = _load_config_or_exit(config, require_api_key=False)
+    try:
+        run_estimate(cfg)
+    except Exception as exc:
+        typer.echo(f"Estimate failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def resume(
     job: Path = typer.Argument(..., help="Path to job output directory (contains state.json)"),
     config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
