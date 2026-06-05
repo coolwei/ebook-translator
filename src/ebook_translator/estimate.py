@@ -167,6 +167,8 @@ def build_estimate_report(config: AppConfig) -> dict:
 
 def run_estimate(config: AppConfig) -> dict:
     """Build the estimate, print a console summary, and write estimate_report.json."""
+    from .i18n import t, get_cli_language
+
     report = build_estimate_report(config)
 
     output_dir = config.project.output_dir / report["book"]["book_name"]
@@ -178,40 +180,41 @@ def run_estimate(config: AppConfig) -> dict:
 
     b = report["book"]
     s = report["segments"]
-    t = report["tokens"]
+    tk = report["tokens"]
     r = report["requests"]
     rt = report["runtime"]
+    lang = get_cli_language(config)
 
     print("=" * 60)
-    print("Translation Estimate (no API calls were made)")
+    print(t("translation_estimate_title", lang))
     print("=" * 60)
-    print(f"Book title                 : {b['title']}")
-    print(f"Input path                 : {b['input_path']}")
-    print(f"Chapter count              : {b['chapter_count']}")
-    print(f"Segment count              : {s['count']}")
-    print(f"Source character count     : {s['source_chars']}")
-    print(f"Largest segment chars      : {s['largest_segment_chars']}")
-    print(f"Average segment chars      : {s['average_segment_chars']}")
-    print(f"Estimated input tokens     : {t['estimated_input_tokens']}  ({t['estimation_method']})")
-    print(f"Estimated output tokens    : {t['estimated_output_tokens']}  (rough: input * {OUTPUT_TOKEN_RATIO})")
-    print(f"Estimated total tokens     : {t['estimated_total_tokens']}")
-    print(f"Estimated requests         : {r['estimated_requests']}")
-    print(f"Configured rpm             : {rt['configured_rpm']}")
-    print(f"Configured concurrency     : {rt['configured_concurrency']}")
-    print(f"Est. minimum runtime (rpm) : {rt['minimum_minutes']} min")
-    print(f"Retry overhead             : {int(r['retry_overhead_ratio'] * 100)}%")
-    print(f"Est. requests with retry   : {r['estimated_requests_with_retry']}")
-    print(f"Est. runtime with retry    : {rt['minimum_minutes_with_retry']} min")
-    print(f"Segments over max_chars     : {s['exceeding_max_chars_count']} (limit {config.limits.max_chars_per_chunk})")
+    print(f"{t('book_title', lang):<30s}: {b['title']}")
+    print(f"{t('input_path', lang):<30s}: {b['input_path']}")
+    print(f"{t('chapter_count', lang):<30s}: {b['chapter_count']}")
+    print(f"{t('segment_count', lang):<30s}: {s['count']}")
+    print(f"{t('source_char_count', lang):<30s}: {s['source_chars']}")
+    print(f"{t('largest_segment_chars', lang):<30s}: {s['largest_segment_chars']}")
+    print(f"{t('average_segment_chars', lang):<30s}: {s['average_segment_chars']}")
+    print(f"{t('est_input_tokens', lang):<30s}: {tk['estimated_input_tokens']}  ({tk['estimation_method']})")
+    print(f"{t('est_output_tokens', lang):<30s}: {tk['estimated_output_tokens']}  (rough: input * {OUTPUT_TOKEN_RATIO})")
+    print(f"{t('est_total_tokens', lang):<30s}: {tk['estimated_total_tokens']}")
+    print(f"{t('est_requests', lang):<30s}: {r['estimated_requests']}")
+    print(f"{t('configured_rpm', lang):<30s}: {rt['configured_rpm']}")
+    print(f"{t('configured_concurrency', lang):<30s}: {rt['configured_concurrency']}")
+    print(f"{t('est_min_runtime', lang):<30s}: {rt['minimum_minutes']} min")
+    print(f"{t('retry_overhead', lang):<30s}: {int(r['retry_overhead_ratio'] * 100)}%")
+    print(f"{t('est_requests_with_retry', lang):<30s}: {r['estimated_requests_with_retry']}")
+    print(f"{t('est_runtime_with_retry', lang):<30s}: {rt['minimum_minutes_with_retry']} min")
+    print(f"{t('segments_over_max_chars', lang):<30s}: {s['exceeding_max_chars_count']} (limit {config.limits.max_chars_per_chunk})")
 
     if report["warnings"]:
         print("-" * 60)
-        print("Warnings:")
+        print(f"{t('warnings', lang)}:")
         for w in report["warnings"]:
             print(f"  [{w['code']}] {w['message']}")
             if w.get("segment_ids"):
                 print(f"      first ids: {', '.join(w['segment_ids'])}")
     print("=" * 60)
-    print(f"Report saved to {report_path}")
+    print(f"{t('report_saved_to', lang)} {report_path}")
 
     return report

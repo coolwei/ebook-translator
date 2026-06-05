@@ -124,6 +124,7 @@ def test_no_warning_when_within_limits(tmp_path, sample_epub_path):
 
 def test_run_estimate_writes_readable_report(tmp_path, sample_epub_path, capsys):
     cfg = make_sample_config(tmp_path, sample_epub_path)
+    cfg.cli.language = "en"  # Use English for this test
     report = run_estimate(cfg)
 
     book_dir = next(cfg.project.output_dir.iterdir())
@@ -135,7 +136,7 @@ def test_run_estimate_writes_readable_report(tmp_path, sample_epub_path, capsys)
     out = capsys.readouterr().out
     assert "Segment count" in out
     assert "Estimated input tokens" in out
-    assert "no API calls were made" in out
+    assert "Translation Estimate" in out
 
 
 def test_estimate_does_not_call_provider(tmp_path, sample_epub_path):
@@ -171,6 +172,8 @@ project:
 limits:
   rpm: 30
   concurrency: 2
+cli:
+  language: en
 """,
         encoding="utf-8",
     )

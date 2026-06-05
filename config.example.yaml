@@ -48,3 +48,7 @@ quality:
   validate_added_prefix: true
   validate_markdown_fence: true
   validate_explanation_prefix: true
+
+cli:
+  language: zh-TW
+  use_unicode_symbols: true

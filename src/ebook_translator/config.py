@@ -86,6 +86,12 @@ class ContextConfig(BaseModel):
     include_style_guide: bool = False
 
 
+class CliConfig(BaseModel):
+    """CLI display configuration."""
+    language: str = "zh-TW"
+    use_unicode_symbols: bool = True
+
+
 class AppConfig(BaseModel):
     project: ProjectConfig = ProjectConfig()
     input: InputConfig
@@ -96,6 +102,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     quality: QualityConfig = QualityConfig()
     context: ContextConfig = ContextConfig()
+    cli: CliConfig = CliConfig()
 
 
 def load_config(path: Path) -> AppConfig:

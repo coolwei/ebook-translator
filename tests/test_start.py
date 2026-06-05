@@ -35,6 +35,8 @@ def _write_config(tmp_path: Path, book_path: Path | None = None, *, max_retries:
                 "  concurrency: 1",
                 "resume:",
                 f"  max_retries: {max_retries}",
+                "cli:",
+                "  language: en",
             ]
         ),
         encoding="utf-8",

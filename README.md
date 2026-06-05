@@ -41,6 +41,49 @@ ebook-translator start --yes
 
 `ebook-translator start` reads `config.yaml` and `books/*.epub` by default. For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. It stops any book whose segment count exceeds `--max-segments` (default `300`) unless you raise the limit.
 
+## CLI 語言設定
+
+CLI 輸出支援繁體中文（zh-TW）和英文（en）模式。預設為繁體中文。
+
+在 `config.yaml` 中加入以下設定：
+
+```yaml
+cli:
+  language: zh-TW
+  use_unicode_symbols: true
+```
+
+### 繁中 CLI 範例
+
+當 `cli.language: zh-TW` 時，CLI 輸出顯示為繁體中文：
+
+```
+============================================================
+翻譯估算（未呼叫 API）
+============================================================
+書籍標題                    : My Book
+輸入路徑                    : books/my-book.epub
+章節數                      : 10
+段落數                      : 150
+原文字元數                  : 45000
+報告已儲存至 outputs/my-book/estimate_report.json
+```
+
+### 英文 CLI 範例
+
+當 `cli.language: en` 時，CLI 輸出維持英文格式：
+
+```
+============================================================
+translation_estimate_title
+============================================================
+book_title                 : My Book
+input_path                 : books/my-book.epub
+chapter_count              : 10
+segment_count              : 150
+report_saved_to outputs/my-book/estimate_report.json
+```
+
 ## Phase 5: Translation Cache, Quality Gate, Force Controls
 
 翻譯流程預設會優先保護已完成成果並降低 API 成本：

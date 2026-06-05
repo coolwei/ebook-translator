@@ -166,6 +166,7 @@ def start(
     load_dotenv(encoding="utf-8-sig")
     from .checkpoint import CheckpointManager
     from .estimate import run_estimate
+    from .i18n import t, get_cli_language
     from .translator import (
         run_export,
         run_inspect,
@@ -186,13 +187,14 @@ def start(
 
     cfg_base = _load_config_or_exit(config, require_api_key=not dry_run)
     auto_yes = yes or skip_confirm
+    lang = get_cli_language(cfg_base)
 
     for epub_path in books:
         cfg = cfg_base.model_copy(deep=True)
         cfg.input.path = epub_path
 
         typer.echo("=" * 60)
-        typer.echo(f"Book: {epub_path}")
+        typer.echo(f"{t('book', lang)}: {epub_path}")
         typer.echo("=" * 60)
 
         run_inspect(cfg)
@@ -203,13 +205,13 @@ def start(
 
         if segment_count > max_segments:
             typer.echo(
-                f"Skipping {epub_path}: segment count {segment_count} exceeds --max-segments {max_segments}.",
+                f"{t('skipping', lang)} {epub_path}: segment count {segment_count} exceeds --max-segments {max_segments}.",
                 err=True,
             )
             continue
 
         if dry_run:
-            typer.echo("Dry run complete; no API calls were made.")
+            typer.echo(t("dry_run_complete", lang))
             continue
 
         if not auto_yes:
@@ -217,13 +219,13 @@ def start(
             requests = estimate_report["requests"]["estimated_requests_with_retry"]
             runtime = estimate_report["runtime"]["minimum_minutes_with_retry"]
             typer.echo(
-                f"Estimate summary: segments={segment_count}, "
+                f"{t('estimate_summary', lang)}: segments={segment_count}, "
                 f"estimated_total_tokens={tokens}, "
                 f"estimated_requests_with_retry={requests}, "
                 f"estimated_runtime_with_retry={runtime} min"
             )
-            if not typer.confirm("Start translating this book?", default=False):
-                typer.echo(f"Skipped {epub_path}")
+            if not typer.confirm(t("start_translating", lang), default=False):
+                typer.echo(f"{t('skipped', lang)} {epub_path}")
                 continue
 
         asyncio.run(run_translation(cfg, limit=limit))
@@ -231,16 +233,16 @@ def start(
         checkpoint = CheckpointManager(job_dir)
         failed_ids = checkpoint.load_failed_ids()
         if failed_ids:
-            typer.echo(f"Retrying failed segments: {len(failed_ids)}")
+            typer.echo(f"{t('retrying_failed', lang)}: {len(failed_ids)}")
             asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
 
         qf_ids = _quality_failed_ids(job_dir, cfg)
         if qf_ids:
-            typer.echo(f"Retrying quality-failed segments: {len(qf_ids)}")
+            typer.echo(f"{t('retrying_quality_failed', lang)}: {len(qf_ids)}")
             asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
 
         run_validate(job_dir)
-        run_report_missing(job_dir, cfg.input.path)
+        run_report_missing(job_dir, cfg.input.path, cfg)
         run_export(job_dir, cfg)
 
 
@@ -366,6 +368,7 @@ def retry_quality_failed(
 @app.command()
 def validate(
     job: Path = typer.Argument(..., help="Path to job output directory"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config YAML file (optional for language setting)"),
 ) -> None:
     """Run validation checks on a completed translation job."""
     from .translator import run_validate
@@ -374,7 +377,15 @@ def validate(
         typer.echo(f"Directory not found: {job}", err=True)
         raise typer.Exit(1)
 
-    run_validate(job)
+    # Load config if provided (for language setting); otherwise use defaults
+    cfg = None
+    if config is not None:
+        try:
+            cfg = _load_config_or_exit(config, require_api_key=False)
+        except Exception:
+            pass  # Ignore config errors; validate doesn't need API key
+
+    run_validate(job, cfg)
 
 
 @app.command()
@@ -422,7 +433,7 @@ def report_missing(
     cfg = _load_config_or_exit(config, require_api_key=False)
 
     try:
-        run_report_missing(job, cfg.input.path)
+        run_report_missing(job, cfg.input.path, cfg)
     except Exception as exc:
         typer.echo(f"report-missing failed: {exc}", err=True)
         raise typer.Exit(1)

@@ -38,7 +38,9 @@ def _write_config(tmp_path: Path, epub_path: Path) -> Path:
         "provider:\n"
         "  base_url: https://api.example.com/v1\n"
         "  api_key_env: FAKE_KEY\n"
-        "  model: test-model\n",
+        "  model: test-model\n"
+        "cli:\n"
+        "  language: en\n",
         encoding="utf-8",
     )
     return cfg_path
@@ -237,7 +239,7 @@ def test_report_missing_empty_when_all_translated(tmp_path, sample_epub_path):
 
     data = json.loads((job_dir / "missing_translation_report.json").read_text(encoding="utf-8"))
     assert data == [], f"Expected empty report when all translated; got {data}"
-    assert "nothing missing" in result.output
+    assert "all blocks translated" in result.output
 
 
 def test_report_missing_console_shows_totals(tmp_path, sample_epub_path):

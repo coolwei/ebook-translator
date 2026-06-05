@@ -9,6 +9,7 @@ from ebooklib import epub
 
 from ebook_translator.config import (
     AppConfig,
+    CliConfig,
     ContextConfig,
     InputConfig,
     LimitsConfig,
@@ -153,6 +154,7 @@ def make_sample_config(tmp_path: Path, epub_path: Path | None = None) -> AppConf
         logging=LoggingConfig(level="debug"),
         quality=QualityConfig(),
         context=ContextConfig(previous_segments=1),
+        cli=CliConfig(language="zh-TW"),
     )
 
 

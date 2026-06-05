@@ -428,15 +428,17 @@ async def run_translation(
     )
 
 
-def run_validate(output_dir: Path) -> None:
+def run_validate(output_dir: Path, config: AppConfig | None = None) -> None:
     from .config import QualityConfig
+    from .i18n import t, get_cli_language
 
     checkpoint = CheckpointManager(output_dir)
     segments = checkpoint.load_segments()
     translations = checkpoint.load_all_translations()
 
     if not segments:
-        print("No segments found. Run translate first.", file=sys.stderr)
+        lang = get_cli_language(config) if config else "zh-TW"
+        print(t("no_segments_found", lang), file=sys.stderr)
         return
 
     pairs = [
@@ -447,19 +449,26 @@ def run_validate(output_dir: Path) -> None:
 
     report = validate_translations(pairs, QualityConfig())
     save_validation_report(report, output_dir)
+
+    lang = get_cli_language(config) if config else "zh-TW"
     print(
-        f"Validation: {report.total_checked} checked, "
-        f"{report.warnings} warnings, {report.errors} errors"
+        f"{t('validation', lang)}: {report.total_checked} {t('checked', lang)}, "
+        f"{report.warnings} {t('validation_warnings', lang)}, "
+        f"{report.errors} {t('validation_errors', lang)}"
     )
-    print(f"Report saved to {output_dir / 'validation_report.json'}")
+    print(f"{t('report_saved', lang)} {output_dir / 'validation_report.json'}")
 
 
 def run_export(output_dir: Path, config: AppConfig) -> None:
+    from .i18n import t, get_cli_language
+
     checkpoint = CheckpointManager(output_dir)
     state = checkpoint.load_state()
     if not state:
-        print("No job state found.", file=sys.stderr)
+        print(t("no_job_state"), file=sys.stderr)
         return
+
+    lang = get_cli_language(config)
 
     spine_docs: list[SpineDocument]
     book, spine_docs = read_epub(Path(state.input_path))
@@ -470,33 +479,36 @@ def run_export(output_dir: Path, config: AppConfig) -> None:
 
     epub_out = output_dir / "translated.epub"
     write_bilingual_epub(book, rendered, epub_out)
-    print(f"Exported: {epub_out}")
+    print(f"{t('exported', lang)}: {epub_out}")
 
     bilingual_html = build_bilingual_html(spine_docs, rendered)
     html_out = output_dir / "bilingual.html"
     html_out.write_text(bilingual_html, encoding="utf-8")
-    print(f"Exported: {html_out}")
+    print(f"{t('exported', lang)}: {html_out}")
 
 
 def run_inspect(config: AppConfig) -> None:
     """Read the EPUB and report spine + segment statistics without translating."""
+    from .i18n import t, get_cli_language
+
     book, spine_docs = read_epub(config.input.path)
     book_name = _get_book_name(book, config.input.path)
+    lang = get_cli_language(config)
 
-    print(f"Book name:   {book_name}")
-    print(f"Input path:  {config.input.path}")
-    print(f"Spine docs:  {len(spine_docs)}")
+    print(f"{t('book_name', lang):<15s} {book_name}")
+    print(f"{t('input_path', lang):<15s} {config.input.path}")
+    print(f"{t('spine_docs', lang):<15s} {len(spine_docs)}")
 
     total_segments = 0
     for doc in spine_docs:
         segs = segment_all_documents([doc])
         total_segments += len(segs)
-        print(f"  [{doc.chapter_index:04d}] {doc.href}: {len(segs)} segments")
+        print(f"  [{doc.chapter_index:04d}] {doc.href}: {len(segs)} {t('segments', lang)}")
 
-    print(f"Total segments: {total_segments}")
+    print(f"{t('total_segments', lang)}: {total_segments}")
 
 
-def run_report_missing(job_dir: Path, epub_path: Path) -> None:
+def run_report_missing(job_dir: Path, epub_path: Path, config: AppConfig | None = None) -> None:
     """Generate missing_translation_report.json for an existing job.
 
     Reads the EPUB at *epub_path*, cross-references every translatable block
@@ -505,6 +517,7 @@ def run_report_missing(job_dir: Path, epub_path: Path) -> None:
 
     Prints a human-readable summary to stdout.  Never calls any provider.
     """
+    from .i18n import t, get_cli_language
     from .missing_report import build_missing_translation_report, save_missing_translation_report
 
     checkpoint = CheckpointManager(job_dir)
@@ -533,13 +546,14 @@ def run_report_missing(job_dir: Path, epub_path: Path) -> None:
         reason_counts[r] = reason_counts.get(r, 0) + 1
 
     # --- console output ---
-    print(f"Missing translation report: {out_path}")
-    print(f"  total_checked_blocks : {total_blocks}")
-    print(f"  missing_count        : {missing_count}")
+    lang = get_cli_language(config) if config else "zh-TW"
+    print(f"{t('missing_translation_report', lang)}: {out_path}")
+    print(f"  {t('total_checked_blocks', lang)} : {total_blocks}")
+    print(f"  {t('missing_count', lang)}        : {missing_count}")
     if reason_counts:
-        print("  breakdown by reason:")
+        print(f"  {t('breakdown_by_reason', lang)}:")
         for reason, count in sorted(reason_counts.items()):
             print(f"    {reason:<30s}: {count}")
     else:
-        print("  (all blocks translated — nothing missing)")
+        print(f"  ({t('all_blocks_translated', lang)})")
 
