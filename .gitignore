@@ -9,8 +9,10 @@ config.yaml
 books/
 outputs/
 jobs/
+logs/
 *.epub
 *.log
+translations.jsonl
 
 # Python
 __pycache__/

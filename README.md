@@ -1,5 +1,46 @@
 # ebook-translator
 
+## Quick Start
+
+1. Put one or more EPUB files into `books/`.
+2. Copy and edit the local config:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+3. Set the API key environment variable named by `provider.api_key_env`:
+
+```bash
+export TRANSLATION_API_KEY=sk-your-api-key
+```
+
+Or put it in local `.env` (do not commit this file):
+
+```dotenv
+TRANSLATION_API_KEY=sk-your-api-key
+```
+
+4. Preview without API calls:
+
+```bash
+ebook-translator start --dry-run
+```
+
+5. Trial translate only the first 10 pending segments:
+
+```bash
+ebook-translator start --limit 10
+```
+
+6. When the estimate and trial output look right, run the full guarded workflow:
+
+```bash
+ebook-translator start --yes
+```
+
+`ebook-translator start` reads `config.yaml` and `books/*.epub` by default. For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. It stops any book whose segment count exceeds `--max-segments` (default `300`) unless you raise the limit.
+
 ## Phase 5: Translation Cache, Quality Gate, Force Controls
 
 翻譯流程預設會優先保護已完成成果並降低 API 成本：

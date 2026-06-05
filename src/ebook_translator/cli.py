@@ -36,6 +36,39 @@ def _load_config_or_exit(config: Path, *, require_api_key: bool = True):
         raise typer.Exit(1)
 
 
+def _collect_start_books(books_dir: Path, book: Path | None) -> list[Path]:
+    if book is not None:
+        candidates = [book]
+        if not book.is_absolute() and not book.exists():
+            candidates.append(books_dir / book)
+        for candidate in candidates:
+            if candidate.exists() and candidate.suffix.lower() == ".epub":
+                return [candidate]
+        raise FileNotFoundError(f"EPUB not found: {book}")
+
+    if not books_dir.exists():
+        return []
+    return sorted(
+        path for path in books_dir.iterdir()
+        if path.is_file() and path.suffix.lower() == ".epub"
+    )
+
+
+def _quality_failed_ids(job_dir: Path, cfg) -> set[str]:
+    from .checkpoint import CheckpointManager
+    from .validator import quality_failed_segment_ids
+
+    checkpoint = CheckpointManager(job_dir)
+    segments = checkpoint.load_segments()
+    translations = checkpoint.load_all_translations()
+    pairs = [
+        (seg, translations[seg.segment_id])
+        for seg in segments
+        if seg.segment_id in translations
+    ]
+    return quality_failed_segment_ids(pairs, cfg.quality)
+
+
 @app.command()
 def translate(
     config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
@@ -116,6 +149,99 @@ def estimate(
     except Exception as exc:
         typer.echo(f"Estimate failed: {exc}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def start(
+    config: Path = typer.Option(Path("config.yaml"), "--config", "-c", help="Path to config YAML file"),
+    books_dir: Path = typer.Option(Path("books"), "--books-dir", help="Directory containing EPUB files"),
+    book: Path | None = typer.Option(None, "--book", help="Translate only this EPUB file"),
+    limit: int | None = typer.Option(None, "--limit", help="Translate at most N pending segments per step"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only run inspect + estimate; no API calls"),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation and start translating"),
+    max_segments: int = typer.Option(300, "--max-segments", help="Stop a book if segment count exceeds this"),
+    skip_confirm: bool = typer.Option(False, "--skip-confirm", help="Alias for --yes"),
+) -> None:
+    """Run the full translation workflow for EPUBs in books/."""
+    load_dotenv(encoding="utf-8-sig")
+    from .checkpoint import CheckpointManager
+    from .estimate import run_estimate
+    from .translator import (
+        run_export,
+        run_inspect,
+        run_report_missing,
+        run_translation,
+        run_validate,
+    )
+
+    try:
+        books = _collect_start_books(books_dir, book)
+    except Exception as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+
+    if not books:
+        typer.echo(f"No EPUB files found in {books_dir}. Put .epub files there or pass --book.", err=True)
+        raise typer.Exit(1)
+
+    cfg_base = _load_config_or_exit(config, require_api_key=not dry_run)
+    auto_yes = yes or skip_confirm
+
+    for epub_path in books:
+        cfg = cfg_base.model_copy(deep=True)
+        cfg.input.path = epub_path
+
+        typer.echo("=" * 60)
+        typer.echo(f"Book: {epub_path}")
+        typer.echo("=" * 60)
+
+        run_inspect(cfg)
+        estimate_report = run_estimate(cfg)
+        segment_count = int(estimate_report["segments"]["count"])
+        book_name = estimate_report["book"]["book_name"]
+        job_dir = cfg.project.output_dir / book_name
+
+        if segment_count > max_segments:
+            typer.echo(
+                f"Skipping {epub_path}: segment count {segment_count} exceeds --max-segments {max_segments}.",
+                err=True,
+            )
+            continue
+
+        if dry_run:
+            typer.echo("Dry run complete; no API calls were made.")
+            continue
+
+        if not auto_yes:
+            tokens = estimate_report["tokens"]["estimated_total_tokens"]
+            requests = estimate_report["requests"]["estimated_requests_with_retry"]
+            runtime = estimate_report["runtime"]["minimum_minutes_with_retry"]
+            typer.echo(
+                f"Estimate summary: segments={segment_count}, "
+                f"estimated_total_tokens={tokens}, "
+                f"estimated_requests_with_retry={requests}, "
+                f"estimated_runtime_with_retry={runtime} min"
+            )
+            if not typer.confirm("Start translating this book?", default=False):
+                typer.echo(f"Skipped {epub_path}")
+                continue
+
+        asyncio.run(run_translation(cfg, limit=limit))
+
+        checkpoint = CheckpointManager(job_dir)
+        failed_ids = checkpoint.load_failed_ids()
+        if failed_ids:
+            typer.echo(f"Retrying failed segments: {len(failed_ids)}")
+            asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
+
+        qf_ids = _quality_failed_ids(job_dir, cfg)
+        if qf_ids:
+            typer.echo(f"Retrying quality-failed segments: {len(qf_ids)}")
+            asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
+
+        run_validate(job_dir)
+        run_report_missing(job_dir, cfg.input.path)
+        run_export(job_dir, cfg)
 
 
 @app.command()
