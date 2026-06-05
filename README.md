@@ -345,3 +345,21 @@ pytest tests/ -v
 - 不要 commit 真實 API key
 - `config.yaml`、`.env`、`books/`、`outputs/` 已加入 `.gitignore`
 - API key 只從環境變數讀取
+
+## Windows 一鍵啟動
+
+雙擊 `start-ebook-translator.bat` 或在 PowerShell 執行：
+
+```powershell
+.\start-ebook-translator.bat
+```
+
+首次使用需先建立虛擬環境：
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+選單提供常用操作：查看說明、估算成本、翻譯、驗證、匯出等。API key 仍建議透過環境變數或 `.env` 管理，不要寫進 `.bat` 檔。
