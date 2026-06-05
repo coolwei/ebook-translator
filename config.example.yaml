@@ -16,9 +16,9 @@ translation:
 
 provider:
   type: openai_compatible
-  base_url: "https://ai-lab.9767496.xyz/v1"
+  base_url: "https://your-openai-compatible-endpoint.example.com/v1"
   api_key_env: "TRANSLATION_API_KEY"
-  model: "nvidia-3_step-3.7-flash"
+  model: "your-model-name"
   timeout_seconds: 120
 
 limits:
