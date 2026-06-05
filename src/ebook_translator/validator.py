@@ -36,7 +36,12 @@ def _count_html_tags(html: str) -> dict[str, int]:
 
 
 def _extract_urls(text: str) -> set[str]:
-    return set(re.findall(r"https?://\S+", text))
+    # Stop at whitespace, quotes, and angle brackets so URLs embedded in HTML
+    # attributes (href="...") are captured without trailing markup. Also trim
+    # common trailing punctuation.
+    urls = re.findall(r"""https?://[^\s"'<>]+""", text)
+    trailing = ".,;:!?)]}。，、；：！？）"
+    return {u.rstrip(trailing) for u in urls}
 
 
 def check_empty(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
@@ -108,6 +113,104 @@ def check_missing_urls(segment: Segment, record: TranslationRecord) -> Validatio
     return None
 
 
+# Common Simplified-only characters (their Traditional form differs). Presence of
+# any of these in the output indicates the model produced Simplified Chinese.
+SIMPLIFIED_CHARS = set(
+    "开关门们这国对来时学实发会样难应进过还说现觉觉际"
+    "东车书长马鸟鱼语职术语丽义乐买卖钱银铁银电脑网络"
+    "经济临团队员问题间办点热爱护尽红绿见观让认让动单"
+    "为产业丰专与丛个临举乱争亏亚亲仅从仑仓仪们价众优"
+    "传伤伦体余佣侠侣俭俩储儿党兰关兴兵养兽内冈册写军"
+    "农冯冲决况减凉凑击凤凭凯击刘则刚创删别剥剧劝办务"
+    "动励劳势勋勤区医华协单卖卢卫却厂厅历厉压厌厍县参"
+)
+
+# Leading bracketed prefix such as 【第一章：…】, ［…］, [...], （…）
+_PREFIX_RE = re.compile(r"^\s*[【\[［（(][^】\]］）)]*[】\]］）)]")
+
+# Markdown code fence anywhere in the output.
+_FENCE_RE = re.compile(r"```")
+
+# Explanatory prefixes the model sometimes prepends.
+_EXPLANATION_RE = re.compile(
+    r"^\s*(翻譯如下|翻译如下|譯文如下|译文如下|譯文[:：]|译文[:：]|"
+    r"以下是(本文|該|这|這)?的?(翻譯|翻译|譯文|译文)|"
+    r"here\s+is\s+the\s+translation|translation\s*[:：])",
+    re.IGNORECASE,
+)
+
+
+def detect_simplified_chinese(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
+    found = sorted({ch for ch in record.translation if ch in SIMPLIFIED_CHARS})
+    if found:
+        return ValidationIssue(
+            segment_id=segment.segment_id,
+            check="simplified_chinese",
+            severity="error",
+            detail=f"Translation contains Simplified Chinese characters: {''.join(found)}",
+        )
+    return None
+
+
+def detect_added_prefix(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
+    m = _PREFIX_RE.match(record.translation)
+    if m:
+        return ValidationIssue(
+            segment_id=segment.segment_id,
+            check="added_prefix",
+            severity="error",
+            detail=f"Translation begins with an added bracketed prefix: {m.group(0).strip()!r}",
+        )
+    return None
+
+
+def detect_markdown_fence(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
+    if _FENCE_RE.search(record.translation):
+        return ValidationIssue(
+            segment_id=segment.segment_id,
+            check="markdown_fence",
+            severity="error",
+            detail="Translation contains a Markdown code fence (```).",
+        )
+    return None
+
+
+def detect_explanation_prefix(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
+    m = _EXPLANATION_RE.match(record.translation)
+    if m:
+        return ValidationIssue(
+            segment_id=segment.segment_id,
+            check="explanation_prefix",
+            severity="error",
+            detail=f"Translation begins with an explanatory prefix: {m.group(0).strip()!r}",
+        )
+    return None
+
+
+def classify_failure(error: str | None) -> str:
+    """Map a failed record's error message to a coarse failure category."""
+    if not error:
+        return "unknown"
+    low = error.lower()
+    if "empty message content" in low or "nonetype" in low and "strip" in low:
+        return "empty message content"
+    if "timed out" in low or "timeout" in low:
+        return "timeout"
+    if "context length" in low:
+        return "context exceeded"
+    if "authentication failed" in low:
+        return "fatal provider error"
+    if "endpoint not found" in low or "(404)" in low:
+        return "fatal provider error"
+    if "rate limit" in low:
+        return "rate limit"
+    if "provider error (5" in low:
+        return "provider 5xx"
+    if "expecting value" in low or "json" in low or "keyerror" in low or "malformed" in low:
+        return "malformed response"
+    return "fatal provider error"
+
+
 def check_record_status(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
     if record.status == "completed":
         return None
@@ -127,6 +230,13 @@ def validate_translations(
     config: QualityConfig,
 ) -> ValidationReport:
     issues: list[ValidationIssue] = []
+
+    # Keep only the latest record per segment_id, so a later successful retry
+    # supersedes an earlier failed record (and is not double-counted).
+    deduped: dict[str, tuple[Segment, TranslationRecord]] = {}
+    for segment, record in pairs:
+        deduped[segment.segment_id] = (segment, record)
+    pairs = list(deduped.values())
 
     for segment, record in pairs:
         if record.status != "completed":
@@ -159,6 +269,26 @@ def validate_translations(
         if issue:
             issues.append(issue)
 
+        if config.validate_simplified_chinese:
+            issue = detect_simplified_chinese(segment, record)
+            if issue:
+                issues.append(issue)
+
+        if config.validate_added_prefix:
+            issue = detect_added_prefix(segment, record)
+            if issue:
+                issues.append(issue)
+
+        if config.validate_markdown_fence:
+            issue = detect_markdown_fence(segment, record)
+            if issue:
+                issues.append(issue)
+
+        if config.validate_explanation_prefix:
+            issue = detect_explanation_prefix(segment, record)
+            if issue:
+                issues.append(issue)
+
     total = len(pairs)
     warnings = sum(1 for i in issues if i.severity == "warning")
     errors = sum(1 for i in issues if i.severity == "error")
@@ -170,6 +300,26 @@ def validate_translations(
         warnings=warnings,
         errors=errors,
     )
+
+
+# Checks that indicate a translation completed but is unacceptable quality and
+# therefore eligible for a quality-failed retry (as opposed to a hard failure).
+QUALITY_CHECKS = frozenset(
+    {"simplified_chinese", "added_prefix", "markdown_fence", "explanation_prefix"}
+)
+
+
+def quality_failed_segment_ids(
+    pairs: list[tuple[Segment, TranslationRecord]],
+    config: QualityConfig,
+) -> set[str]:
+    """Return segment_ids whose latest record is completed but fails a quality check.
+
+    Uses the same dedup-to-latest behaviour as ``validate_translations`` so only the
+    most recent record per segment is considered.
+    """
+    report = validate_translations(pairs, config)
+    return {i.segment_id for i in report.issues if i.check in QUALITY_CHECKS}
 
 
 def save_validation_report(report: ValidationReport, output_dir: Path) -> None:

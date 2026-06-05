@@ -13,6 +13,12 @@ from ebook_translator.validator import (
     check_length_ratio,
     check_missing_urls,
     check_record_status,
+    classify_failure,
+    detect_added_prefix,
+    detect_explanation_prefix,
+    detect_markdown_fence,
+    detect_simplified_chinese,
+    quality_failed_segment_ids,
     validate_translations,
 )
 
@@ -109,6 +115,15 @@ def test_check_missing_urls_passes_when_present():
     assert check_missing_urls(seg, rec) is None
 
 
+def test_check_missing_urls_passes_for_html_anchor():
+    # URL embedded in an <a href> must not trip the check when preserved.
+    seg = make_segment(
+        source_html='For more details, visit <a href="https://example.com/intro">the introduction</a>.'
+    )
+    rec = make_record('如需更多詳細資訊，請造訪<a href="https://example.com/intro">緒論</a>。')
+    assert check_missing_urls(seg, rec) is None
+
+
 def test_check_record_status_detects_failed_translation():
     issue = check_record_status(make_segment(), make_record("", status="failed"))
     assert issue is not None
@@ -147,3 +162,125 @@ def test_validate_reports_failed_records():
     report = validate_translations([(seg, rec)], cfg)
     assert report.errors == 1
     assert report.issues[0].check == "translation_failed"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.5 translation-quality validators
+# ---------------------------------------------------------------------------
+
+def test_detect_simplified_chinese_flags_simplified():
+    seg = make_segment()
+    rec = make_record("这是开端")  # 这/开 are Simplified
+    issue = detect_simplified_chinese(seg, rec)
+    assert issue is not None
+    assert issue.check == "simplified_chinese"
+    assert issue.severity == "error"
+
+
+def test_detect_simplified_chinese_passes_traditional():
+    seg = make_segment()
+    rec = make_record("這是開端，那是一個明亮的寒冷四月天。")
+    assert detect_simplified_chinese(seg, rec) is None
+
+
+def test_detect_added_prefix_flags_chapter_prefix():
+    seg = make_segment()
+    rec = make_record("【第一章：開端】那是一個明亮的寒冷四月天。")
+    issue = detect_added_prefix(seg, rec)
+    assert issue is not None
+    assert issue.check == "added_prefix"
+
+
+def test_detect_added_prefix_passes_clean():
+    seg = make_segment()
+    rec = make_record("那是一個明亮的寒冷四月天。")
+    assert detect_added_prefix(seg, rec) is None
+
+
+def test_detect_markdown_fence_flags_fence():
+    seg = make_segment()
+    rec = make_record("```\n那是一個明亮的寒冷四月天。\n```")
+    issue = detect_markdown_fence(seg, rec)
+    assert issue is not None
+    assert issue.check == "markdown_fence"
+
+
+def test_detect_explanation_prefix_flags_note():
+    seg = make_segment()
+    rec = make_record("翻譯如下：那是一個明亮的寒冷四月天。")
+    issue = detect_explanation_prefix(seg, rec)
+    assert issue is not None
+    assert issue.check == "explanation_prefix"
+
+
+def test_detect_explanation_prefix_passes_clean():
+    seg = make_segment()
+    rec = make_record("那是一個明亮的寒冷四月天。")
+    assert detect_explanation_prefix(seg, rec) is None
+
+
+def test_phase2_bad_translation_flags_prefix_and_simplified():
+    """The exact Phase 2 bad output should now be caught."""
+    cfg = QualityConfig()
+    seg = make_segment(source_html="It was a <em>bright</em> cold day.")
+    rec = make_record("【第一章：开端】那是一個<em>明亮</em>的寒冷四月天。")
+    report = validate_translations([(seg, rec)], cfg)
+    checks = {i.check for i in report.issues}
+    assert "added_prefix" in checks
+    assert "simplified_chinese" in checks
+
+
+def test_validate_latest_success_supersedes_failed():
+    """A later completed record for the same segment must clear the earlier failure."""
+    cfg = QualityConfig()
+    seg = make_segment()
+    failed = make_record("", status="failed")
+    completed = make_record("那是一個明亮的寒冷四月天。", status="completed")
+    # Same segment_id, failed first then completed
+    report = validate_translations([(seg, failed), (seg, completed)], cfg)
+    assert report.errors == 0
+    assert report.total_checked == 1
+
+
+def test_classify_failure_empty_content():
+    assert classify_failure("Provider returned empty message content") == "empty message content"
+    assert classify_failure("'NoneType' object has no attribute 'strip'") == "empty message content"
+
+
+def test_classify_failure_categories():
+    assert classify_failure("Request timed out: ...") == "timeout"
+    assert classify_failure("Context length exceeded: ...") == "context exceeded"
+    assert classify_failure("Rate limit exceeded: ...") == "rate limit"
+    assert classify_failure("Provider error (500): boom") == "provider 5xx"
+    assert classify_failure("Provider endpoint not found (404): nope") == "fatal provider error"
+    assert classify_failure(None) == "unknown"
+
+
+def test_quality_failed_segment_ids_detects_quality_issues():
+    cfg = QualityConfig()
+    seg = make_segment()
+    bad = make_record("【第一章：开端】这是简体譯文")  # added_prefix + simplified
+    assert quality_failed_segment_ids([(seg, bad)], cfg) == {seg.segment_id}
+
+
+def test_quality_failed_segment_ids_ignores_clean():
+    cfg = QualityConfig()
+    seg = make_segment()
+    clean = make_record("這是乾淨的繁體譯文。")
+    assert quality_failed_segment_ids([(seg, clean)], cfg) == set()
+
+
+def test_quality_failed_latest_clean_record_supersedes():
+    cfg = QualityConfig()
+    seg = make_segment()
+    bad = make_record("【第一章：开端】这是简体譯文")
+    clean = make_record("這是乾淨的繁體譯文。")
+    # Old bad record then a newer clean record for the same segment_id
+    assert quality_failed_segment_ids([(seg, bad), (seg, clean)], cfg) == set()
+
+
+def test_quality_failed_does_not_include_hard_failed():
+    cfg = QualityConfig()
+    seg = make_segment()
+    failed = make_record("", status="failed")  # hard failure, not a quality issue
+    assert quality_failed_segment_ids([(seg, failed)], cfg) == set()

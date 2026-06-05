@@ -43,7 +43,7 @@ def translate(
     limit: int | None = typer.Option(None, "--limit", help="Translate at most N segments this run"),
 ) -> None:
     """Translate an EPUB using a config file."""
-    load_dotenv()
+    load_dotenv(encoding="utf-8-sig")  # tolerate a UTF-8 BOM in .env
     from .logging_setup import setup_logging
     from .translator import run_translation
 
@@ -91,7 +91,7 @@ def resume(
     config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
 ) -> None:
     """Resume a previously interrupted translation job."""
-    load_dotenv()
+    load_dotenv(encoding="utf-8-sig")  # tolerate a UTF-8 BOM in .env
     from .config import load_config
     from .logging_setup import setup_logging
     from .translator import run_translation
@@ -124,6 +124,86 @@ def resume(
         raise typer.Exit(1)
 
 
+@app.command(name="retry-failed")
+def retry_failed(
+    job: Path = typer.Argument(..., help="Path to job output directory (contains state.json)"),
+    config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
+    limit: int | None = typer.Option(None, "--limit", help="Retry at most N failed segments"),
+) -> None:
+    """Retry only the segments that previously failed (never re-translates completed ones)."""
+    load_dotenv(encoding="utf-8-sig")  # tolerate a UTF-8 BOM in .env
+    from .config import load_config
+    from .logging_setup import setup_logging
+    from .translator import run_translation
+
+    if not (job / "state.json").exists():
+        typer.echo(f"No state.json found in {job}", err=True)
+        raise typer.Exit(1)
+
+    try:
+        cfg = load_config(config)
+    except Exception as exc:
+        typer.echo(f"Error loading config: {exc}", err=True)
+        raise typer.Exit(1)
+
+    import json
+    state_data = json.loads((job / "state.json").read_text(encoding="utf-8"))
+    cfg.project.output_dir = job.parent
+    cfg.input.path = Path(state_data["input_path"])
+
+    setup_logging(job)
+
+    try:
+        asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
+    except KeyboardInterrupt:
+        typer.echo("\nInterrupted.", err=True)
+        raise typer.Exit(130)
+    except Exception as exc:
+        typer.echo(f"Retry failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command(name="retry-quality-failed")
+def retry_quality_failed(
+    job: Path = typer.Argument(..., help="Path to job output directory (contains state.json)"),
+    config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
+    limit: int | None = typer.Option(None, "--limit", help="Retry at most N quality-failed segments"),
+) -> None:
+    """Re-translate completed segments that fail a quality check (simplified Chinese,
+    added prefix, markdown fence, explanation prefix). Never touches clean completed
+    segments or hard-failed segments (use retry-failed for those)."""
+    load_dotenv(encoding="utf-8-sig")  # tolerate a UTF-8 BOM in .env
+    from .config import load_config
+    from .logging_setup import setup_logging
+    from .translator import run_translation
+
+    if not (job / "state.json").exists():
+        typer.echo(f"No state.json found in {job}", err=True)
+        raise typer.Exit(1)
+
+    try:
+        cfg = load_config(config)
+    except Exception as exc:
+        typer.echo(f"Error loading config: {exc}", err=True)
+        raise typer.Exit(1)
+
+    import json
+    state_data = json.loads((job / "state.json").read_text(encoding="utf-8"))
+    cfg.project.output_dir = job.parent
+    cfg.input.path = Path(state_data["input_path"])
+
+    setup_logging(job)
+
+    try:
+        asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
+    except KeyboardInterrupt:
+        typer.echo("\nInterrupted.", err=True)
+        raise typer.Exit(130)
+    except Exception as exc:
+        typer.echo(f"Retry quality-failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+
 @app.command()
 def validate(
     job: Path = typer.Argument(..., help="Path to job output directory"),
@@ -144,7 +224,7 @@ def export(
     config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
 ) -> None:
     """Re-export bilingual EPUB and HTML from completed job."""
-    load_dotenv()
+    load_dotenv(encoding="utf-8-sig")  # tolerate a UTF-8 BOM in .env
     from .translator import run_export
 
     # Export only re-renders from the checkpoint; no API key needed.

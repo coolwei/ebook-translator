@@ -77,11 +77,28 @@ ebook-translator resume outputs/<書名> --config config.yaml
 
 已完成的 segment 不會重翻。
 
+### 只重試失敗的段落
+
+```bash
+ebook-translator retry-failed outputs/<書名> --config config.yaml --limit 2
+```
+
+只會重試先前 `failed` 的 segment，不會重翻已 `completed` 的段落。重試成功後會
+append 新的 record，validate 時以最新成功結果為準（舊的 failed record 不再算錯誤）。
+
 ### 驗證翻譯結果
 
 ```bash
 ebook-translator validate outputs/<書名>
 ```
+
+驗證項目包含基本檢查（空譯文、與原文相同、長度比例、HTML 標籤、遺漏 URL）以及
+翻譯品質檢查：
+
+- `simplified_chinese`：偵測簡體字（要求繁體中文台灣用語）
+- `added_prefix`：偵測模型自行加上的章節／括號前綴，例如 `【第一章：…】`
+- `markdown_fence`：偵測 Markdown 程式碼圍欄 ` ``` `
+- `explanation_prefix`：偵測「翻譯如下」「譯文：」等說明前綴
 
 ### 重新匯出 EPUB
 

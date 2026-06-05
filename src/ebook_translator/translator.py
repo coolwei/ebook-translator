@@ -18,7 +18,12 @@ from .providers.openai_compatible import OpenAICompatibleProvider
 from .renderer import build_bilingual_html, render_bilingual_documents
 from .scheduler import TranslationScheduler
 from .segmenter.segmenter import segment_all_documents
-from .validator import save_validation_report, validate_translations
+from .validator import (
+    classify_failure,
+    quality_failed_segment_ids,
+    save_validation_report,
+    validate_translations,
+)
 
 
 def _slugify(text: str) -> str:
@@ -129,6 +134,8 @@ async def run_translation(
     *,
     provider: TranslationProvider | None = None,
     limit: int | None = None,
+    failed_only: bool = False,
+    quality_failed_only: bool = False,
 ) -> None:
     logger = get_logger()
 
@@ -168,13 +175,40 @@ async def run_translation(
         state.total_segments = len(all_segments)
         state.completed_segments = len(completed_ids)
 
-    failed_ids = checkpoint.load_failed_ids() if config.resume.retry_failed else {}
+    failed_ids = checkpoint.load_failed_ids()
 
-    pending = [
-        seg for seg in all_segments
-        if seg.segment_id not in completed_ids
-        and (config.resume.retry_failed or seg.segment_id not in failed_ids)
-    ]
+    if quality_failed_only:
+        # Retry only completed segments whose latest record fails a quality check.
+        all_tr = checkpoint.load_all_translations()
+        pairs = [
+            (seg, all_tr[seg.segment_id])
+            for seg in all_segments
+            if seg.segment_id in all_tr
+        ]
+        qf_ids = quality_failed_segment_ids(pairs, config.quality)
+        pending = [seg for seg in all_segments if seg.segment_id in qf_ids]
+        logger.info("Quality-failed retry. Segments with quality issues: %d", len(pending))
+    elif failed_only:
+        # Retry only segments that have a failed record and are not yet completed.
+        pending = [
+            seg for seg in all_segments
+            if seg.segment_id in failed_ids and seg.segment_id not in completed_ids
+        ]
+        categories: dict[str, int] = {}
+        all_tr = checkpoint.load_all_translations()
+        for seg in pending:
+            rec = all_tr.get(seg.segment_id)
+            cat = classify_failure(rec.error if rec else None)
+            categories[cat] = categories.get(cat, 0) + 1
+        logger.info("Failed-only retry. Failure categories: %s", dict(categories))
+    else:
+        retry_failed = config.resume.retry_failed
+        pending = [
+            seg for seg in all_segments
+            if seg.segment_id not in completed_ids
+            and (retry_failed or seg.segment_id not in failed_ids)
+        ]
+
     if limit is not None:
         pending = pending[:limit]
         logger.info("Limiting this run to %d segments", limit)
@@ -201,7 +235,12 @@ async def run_translation(
     recent_completed: list[tuple[Segment, TranslationRecord]] = []
     lock = asyncio.Lock()
 
-    attempt_map = {sid: count + 1 for sid, count in failed_ids.items()}
+    # Next attempt number per segment = latest record's attempt + 1 (covers both
+    # failed retries and quality retries of already-completed segments).
+    attempt_map = {
+        sid: rec.attempt + 1
+        for sid, rec in checkpoint.load_all_translations().items()
+    }
 
     tasks = [
         _translate_one(
@@ -259,10 +298,15 @@ async def run_translation(
     html_out.write_text(bilingual_html, encoding="utf-8")
     logger.info("Exported bilingual HTML: %s", html_out)
 
-    failed_count = sum(1 for seg in all_segments if seg.segment_id not in checkpoint.load_completed_ids())
-    state.status = "completed" if failed_count == 0 else "interrupted"
-    state.completed_segments = len(checkpoint.load_completed_ids())
-    state.failed_segments = len(checkpoint.load_failed_ids())
+    completed_final = checkpoint.load_completed_ids()
+    # A segment with a failed record that was later completed is no longer failed.
+    failed_final = {
+        sid for sid in checkpoint.load_failed_ids() if sid not in completed_final
+    }
+    not_done = sum(1 for seg in all_segments if seg.segment_id not in completed_final)
+    state.status = "completed" if not_done == 0 else "interrupted"
+    state.completed_segments = len(completed_final)
+    state.failed_segments = len(failed_final)
     state.updated_at = datetime.now(timezone.utc)
     checkpoint.save_state(state)
 

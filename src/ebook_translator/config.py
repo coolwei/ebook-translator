@@ -69,6 +69,11 @@ class QualityConfig(BaseModel):
     validate_untranslated_ratio: bool = True
     validate_html_integrity: bool = True
     max_length_ratio: float = 3.0
+    # Translation-quality guards (Phase 2.5)
+    validate_simplified_chinese: bool = True
+    validate_added_prefix: bool = True
+    validate_markdown_fence: bool = True
+    validate_explanation_prefix: bool = True
 
 
 class ContextConfig(BaseModel):
