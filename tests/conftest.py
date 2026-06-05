@@ -107,10 +107,11 @@ class MockTranslationProvider(TranslationProvider):
         if self.call_count <= self._fail_first_n:
             raise self._fail_with("mock error")
 
+        # Clean Traditional output (suffix marker) that passes the quality gate.
         text = (
             self._translation_fn(request.user_message)
             if self._translation_fn
-            else f"[譯] {request.segment.source_text[:50]}"
+            else f"{request.segment.source_text[:50]}（譯）"
         )
         return TranslationResponse(
             translated_text=text,

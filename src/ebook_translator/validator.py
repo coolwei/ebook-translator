@@ -214,6 +214,16 @@ def classify_failure(error: str | None) -> str:
 def check_record_status(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
     if record.status == "completed":
         return None
+    if record.status == "quality_failed":
+        detail = "Translation failed quality gate."
+        if record.error:
+            detail = f"{detail} Checks: {record.error}"
+        return ValidationIssue(
+            segment_id=segment.segment_id,
+            check="quality_failed",
+            severity="error",
+            detail=detail,
+        )
     detail = "Translation did not complete."
     if record.error:
         detail = f"{detail} Error: {record.error}"
@@ -223,6 +233,42 @@ def check_record_status(segment: Segment, record: TranslationRecord) -> Validati
         severity="error",
         detail=detail,
     )
+
+
+def check_quality(
+    segment: Segment, translation: str, config: QualityConfig
+) -> list[ValidationIssue]:
+    """Run the translation-quality checks on a candidate translation string.
+
+    Used both by the live quality gate (before marking a record completed) and by
+    quality-failed detection over stored records.
+    """
+    from datetime import datetime, timezone
+
+    rec = TranslationRecord(
+        segment_id=segment.segment_id,
+        source_hash=segment.sha1_prefix,
+        status="completed",
+        source=segment.source_html,
+        translation=translation,
+        model="",
+        attempt=0,
+        created_at=datetime.now(timezone.utc),
+    )
+    issues: list[ValidationIssue] = []
+    if config.validate_simplified_chinese:
+        if (i := detect_simplified_chinese(segment, rec)):
+            issues.append(i)
+    if config.validate_added_prefix:
+        if (i := detect_added_prefix(segment, rec)):
+            issues.append(i)
+    if config.validate_markdown_fence:
+        if (i := detect_markdown_fence(segment, rec)):
+            issues.append(i)
+    if config.validate_explanation_prefix:
+        if (i := detect_explanation_prefix(segment, rec)):
+            issues.append(i)
+    return issues
 
 
 def validate_translations(
@@ -313,13 +359,24 @@ def quality_failed_segment_ids(
     pairs: list[tuple[Segment, TranslationRecord]],
     config: QualityConfig,
 ) -> set[str]:
-    """Return segment_ids whose latest record is completed but fails a quality check.
+    """Return segment_ids whose latest record is quality-failed.
 
-    Uses the same dedup-to-latest behaviour as ``validate_translations`` so only the
-    most recent record per segment is considered.
+    Considers only the most recent record per segment. A segment is quality-failed
+    when its latest record either has status ``quality_failed`` (set by the live
+    quality gate) or is ``completed`` but still trips a quality check (legacy
+    records created before the gate existed).
     """
-    report = validate_translations(pairs, config)
-    return {i.segment_id for i in report.issues if i.check in QUALITY_CHECKS}
+    latest: dict[str, tuple[Segment, TranslationRecord]] = {}
+    for segment, record in pairs:
+        latest[segment.segment_id] = (segment, record)
+
+    result: set[str] = set()
+    for sid, (segment, record) in latest.items():
+        if record.status == "quality_failed":
+            result.add(sid)
+        elif record.status == "completed" and check_quality(segment, record.translation, config):
+            result.add(sid)
+    return result
 
 
 def save_validation_report(report: ValidationReport, output_dir: Path) -> None:

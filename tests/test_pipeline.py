@@ -84,7 +84,9 @@ async def test_pipeline_all_segments_translated(tmp_path, sample_epub_path):
 
     book_dir = next(cfg.project.output_dir.iterdir())
     lines = [
-        l for l in (book_dir / "translations.jsonl").read_text().splitlines() if l.strip()
+        l
+        for l in (book_dir / "translations.jsonl").read_text(encoding="utf-8").splitlines()
+        if l.strip()
     ]
     import json
     completed = [json.loads(l) for l in lines if json.loads(l)["status"] == "completed"]
@@ -388,3 +390,72 @@ async def test_quality_failed_retry_still_flags_if_still_bad(tmp_path, sample_ep
     pairs_after = [(s, after[s.segment_id]) for s in segments if s.segment_id in after]
     # Still flagged as quality-failed
     assert bad_ids.issubset(quality_failed_segment_ids(pairs_after, QualityConfig()))
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: force / retranslate controls
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_force_retranslates_completed(tmp_path, sample_epub_path):
+    from ebook_translator.epub.reader import read_epub
+    from ebook_translator.segmenter.segmenter import segment_all_documents
+
+    cfg = make_sample_config(tmp_path, sample_epub_path)
+    _, spine = read_epub(cfg.input.path)
+    total = len(segment_all_documents(spine))
+
+    p1 = MockTranslationProvider()
+    with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=p1):
+        await run_translation(cfg)
+    assert p1.call_count == total
+
+    # Without force, a second run skips everything.
+    p_skip = MockTranslationProvider()
+    with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=p_skip):
+        await run_translation(cfg)
+    assert p_skip.call_count == 0
+
+    # With --force, every completed segment is re-translated.
+    p2 = MockTranslationProvider()
+    with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=p2):
+        await run_translation(cfg, force=True)
+    assert p2.call_count == total
+
+
+@pytest.mark.asyncio
+async def test_force_segment_retranslates_only_specified(tmp_path, sample_epub_path):
+    from ebook_translator.checkpoint import CheckpointManager
+    from ebook_translator.epub.reader import read_epub
+    from ebook_translator.segmenter.segmenter import segment_all_documents
+
+    cfg = make_sample_config(tmp_path, sample_epub_path)
+    _, spine = read_epub(cfg.input.path)
+    segs = segment_all_documents(spine)
+    target = segs[1].segment_id
+
+    p1 = MockTranslationProvider()
+    with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=p1):
+        await run_translation(cfg)
+
+    p2 = MockTranslationProvider()
+    with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=p2):
+        await run_translation(cfg, force_segments={target})
+
+    # Only the one specified segment was re-translated.
+    assert p2.call_count == 1
+
+    # A new record was appended for the target (attempt incremented), not overwritten.
+    book_dir = next(cfg.project.output_dir.iterdir())
+    import json
+    recs = [
+        json.loads(l)
+        for l in (book_dir / "translations.jsonl").read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
+    target_recs = [r for r in recs if r["segment_id"] == target]
+    assert len(target_recs) == 2
+    assert target_recs[-1]["attempt"] == 2
+    # Latest record wins for validate/export.
+    ck = CheckpointManager(book_dir)
+    assert ck.load_all_translations()[target].attempt == 2

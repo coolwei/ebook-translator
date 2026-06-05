@@ -44,3 +44,7 @@ quality:
   validate_untranslated_ratio: true
   validate_html_integrity: true
   max_length_ratio: 3.0
+  validate_simplified_chinese: true
+  validate_added_prefix: true
+  validate_markdown_fence: true
+  validate_explanation_prefix: true

@@ -83,6 +83,22 @@ def test_load_failed_ids_returns_attempt_count(tmp_path):
     assert failed["seg-1"] == 2
 
 
+def test_completed_ids_follow_latest_record(tmp_path):
+    mgr = CheckpointManager(tmp_path)
+    mgr.append_translation(make_record("seg-1", status="completed", attempt=1))
+    mgr.append_translation(make_record("seg-1", status="quality_failed", attempt=2))
+
+    assert "seg-1" not in mgr.load_completed_ids()
+
+
+def test_failed_ids_follow_latest_record(tmp_path):
+    mgr = CheckpointManager(tmp_path)
+    mgr.append_translation(make_record("seg-1", status="failed", attempt=1))
+    mgr.append_translation(make_record("seg-1", status="completed", attempt=2))
+
+    assert "seg-1" not in mgr.load_failed_ids()
+
+
 def test_partial_last_line_skipped(tmp_path):
     mgr = CheckpointManager(tmp_path)
     mgr.append_translation(make_record("seg-good"))

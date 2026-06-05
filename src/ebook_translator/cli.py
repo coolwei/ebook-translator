@@ -41,6 +41,12 @@ def translate(
     config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
     mock: bool = typer.Option(False, "--mock", help="Use offline mock provider (no API calls)"),
     limit: int | None = typer.Option(None, "--limit", help="Translate at most N segments this run"),
+    force: bool = typer.Option(False, "--force", help="Re-translate ALL segments, ignoring completed"),
+    force_segment: list[str] | None = typer.Option(
+        None,
+        "--force-segment",
+        help="Re-translate only these segment ids (repeatable or comma-separated)",
+    ),
 ) -> None:
     """Translate an EPUB using a config file."""
     load_dotenv(encoding="utf-8-sig")  # tolerate a UTF-8 BOM in .env
@@ -48,6 +54,11 @@ def translate(
     from .translator import run_translation
 
     cfg = _load_config_or_exit(config, require_api_key=not mock)
+
+    # Collect force-segment ids (repeated flags and/or comma-separated values).
+    force_ids: set[str] = set()
+    for item in force_segment or []:
+        force_ids.update(s.strip() for s in item.split(",") if s.strip())
 
     # Temporary logger until output dir is known (translator re-initializes)
     import tempfile
@@ -61,7 +72,13 @@ def translate(
         provider = MockProvider()
 
     try:
-        asyncio.run(run_translation(cfg, provider=provider, limit=limit))
+        asyncio.run(run_translation(
+            cfg,
+            provider=provider,
+            limit=limit,
+            force=force,
+            force_segments=force_ids or None,
+        ))
     except KeyboardInterrupt:
         typer.echo("\nInterrupted.", err=True)
         raise typer.Exit(130)

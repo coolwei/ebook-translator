@@ -19,11 +19,23 @@ from .renderer import build_bilingual_html, render_bilingual_documents
 from .scheduler import TranslationScheduler
 from .segmenter.segmenter import segment_all_documents
 from .validator import (
+    check_quality,
     classify_failure,
     quality_failed_segment_ids,
     save_validation_report,
     validate_translations,
 )
+
+
+def _is_cacheable_translation(
+    segment: Segment,
+    record: TranslationRecord,
+    config: AppConfig,
+) -> bool:
+    if record.status != "completed":
+        return False
+    report = validate_translations([(segment, record)], config.quality)
+    return report.warnings == 0 and report.errors == 0
 
 
 def _slugify(text: str) -> str:
@@ -46,18 +58,21 @@ def _get_book_name(book: object, input_path: Path) -> str:
     return _slugify(input_path.stem)
 
 
-async def _translate_one(
+async def _do_translate(
     seg: Segment,
     attempt: int,
     scheduler: TranslationScheduler,
-    checkpoint: CheckpointManager,
-    state: JobState,
     system_prompt: str,
     chapter_titles: dict[str, str],
     recent_completed: list[tuple[Segment, TranslationRecord]],
     config: AppConfig,
     lock: asyncio.Lock,
 ) -> TranslationRecord:
+    """Call the provider for one segment and apply the quality gate.
+
+    Returns a TranslationRecord (completed / quality_failed / failed). Never raises;
+    does not append to the checkpoint or mutate job state.
+    """
     logger = get_logger()
     chapter_title = chapter_titles.get(seg.chapter_href)
 
@@ -75,9 +90,29 @@ async def _translate_one(
         max_tokens=config.limits.max_output_tokens,
     )
 
+    def _failed(status: str, model: str, error: str, translation: str = "") -> TranslationRecord:
+        return TranslationRecord(
+            segment_id=seg.segment_id,
+            source_hash=seg.sha1_prefix,
+            status=status,  # type: ignore[arg-type]
+            source=seg.source_html,
+            translation=translation,
+            model=model,
+            attempt=attempt,
+            error=error,
+            created_at=datetime.now(timezone.utc),
+        )
+
     try:
         response = await scheduler.translate(request)
-        record = TranslationRecord(
+        # Quality gate: refuse to mark unacceptable translations as completed.
+        issues = check_quality(seg, response.translated_text, config.quality)
+        if issues:
+            checks = "; ".join(i.check for i in issues)
+            logger.warning("Quality-failed %s: %s", seg.segment_id, checks)
+            return _failed("quality_failed", response.model, checks, response.translated_text)
+        logger.info("Translated %s", seg.segment_id)
+        return TranslationRecord(
             segment_id=seg.segment_id,
             source_hash=seg.sha1_prefix,
             status="completed",
@@ -87,33 +122,83 @@ async def _translate_one(
             attempt=attempt,
             created_at=datetime.now(timezone.utc),
         )
-        logger.info("Translated %s", seg.segment_id)
     except (AuthError, ContextLengthError) as exc:
-        record = TranslationRecord(
-            segment_id=seg.segment_id,
-            source_hash=seg.sha1_prefix,
-            status="failed",
-            source=seg.source_html,
-            translation="",
-            model=config.provider.model,
-            attempt=attempt,
-            error=str(exc),
-            created_at=datetime.now(timezone.utc),
-        )
         logger.error("Failed %s (fatal): %s", seg.segment_id, exc)
+        return _failed("failed", config.provider.model, str(exc))
     except Exception as exc:
-        record = TranslationRecord(
-            segment_id=seg.segment_id,
-            source_hash=seg.sha1_prefix,
-            status="failed",
-            source=seg.source_html,
-            translation="",
-            model=config.provider.model,
-            attempt=attempt,
-            error=str(exc),
-            created_at=datetime.now(timezone.utc),
-        )
         logger.warning("Failed %s: %s", seg.segment_id, exc)
+        return _failed("failed", config.provider.model, str(exc))
+
+
+async def _translate_one(
+    seg: Segment,
+    attempt: int,
+    scheduler: TranslationScheduler,
+    checkpoint: CheckpointManager,
+    state: JobState,
+    system_prompt: str,
+    chapter_titles: dict[str, str],
+    recent_completed: list[tuple[Segment, TranslationRecord]],
+    config: AppConfig,
+    lock: asyncio.Lock,
+    cache: dict[str, tuple[str, str, str]],
+    in_flight: dict[str, asyncio.Event],
+    use_cache: bool,
+) -> TranslationRecord:
+    logger = get_logger()
+    sh = seg.sha1_prefix  # source_hash cache key (hash of normalized source text)
+    record: TranslationRecord | None = None
+
+    while record is None:
+        wait_event: asyncio.Event | None = None
+        become_owner = False
+
+        async with lock:
+            if use_cache and sh in cache:
+                src_id, ctext, cmodel = cache[sh]
+                record = TranslationRecord(
+                    segment_id=seg.segment_id,
+                    source_hash=sh,
+                    status="completed",
+                    source=seg.source_html,
+                    translation=ctext,
+                    model=cmodel,
+                    attempt=attempt,
+                    reused_from_segment_id=src_id,
+                    created_at=datetime.now(timezone.utc),
+                )
+                logger.info("Cache hit %s (reused from %s)", seg.segment_id, src_id)
+                break
+            if use_cache:
+                ev = in_flight.get(sh)
+                if ev is None:
+                    in_flight[sh] = asyncio.Event()
+                    become_owner = True
+                else:
+                    wait_event = ev
+            else:
+                become_owner = True
+
+        if wait_event is not None:
+            # Another task is translating this source_hash; wait, then re-loop.
+            await wait_event.wait()
+            continue
+
+        # We own this source_hash (or caching is off): do the real translation.
+        translated: TranslationRecord | None = None
+        try:
+            translated = await _do_translate(
+                seg, attempt, scheduler, system_prompt, chapter_titles, recent_completed, config, lock
+            )
+        finally:
+            if use_cache:
+                async with lock:
+                    if translated is not None and _is_cacheable_translation(seg, translated, config):
+                        cache.setdefault(sh, (seg.segment_id, translated.translation, translated.model))
+                    ev = in_flight.pop(sh, None)
+                    if ev is not None:
+                        ev.set()
+        record = translated
 
     checkpoint.append_translation(record)
 
@@ -136,6 +221,8 @@ async def run_translation(
     limit: int | None = None,
     failed_only: bool = False,
     quality_failed_only: bool = False,
+    force: bool = False,
+    force_segments: set[str] | None = None,
 ) -> None:
     logger = get_logger()
 
@@ -177,7 +264,17 @@ async def run_translation(
 
     failed_ids = checkpoint.load_failed_ids()
 
-    if quality_failed_only:
+    if force:
+        # Re-translate every segment, ignoring completed state. Appends new records.
+        pending = list(all_segments)
+        logger.info("Force mode: re-translating all %d segments", len(pending))
+    elif force_segments:
+        pending = [seg for seg in all_segments if seg.segment_id in force_segments]
+        unknown = force_segments - {seg.segment_id for seg in all_segments}
+        if unknown:
+            logger.warning("Force-segment ids not found and skipped: %s", ", ".join(sorted(unknown)))
+        logger.info("Force-segment mode: re-translating %d segment(s)", len(pending))
+    elif quality_failed_only:
         # Retry only completed segments whose latest record fails a quality check.
         all_tr = checkpoint.load_all_translations()
         pairs = [
@@ -237,10 +334,22 @@ async def run_translation(
 
     # Next attempt number per segment = latest record's attempt + 1 (covers both
     # failed retries and quality retries of already-completed segments).
-    attempt_map = {
-        sid: rec.attempt + 1
-        for sid, rec in checkpoint.load_all_translations().items()
-    }
+    existing_records = checkpoint.load_all_translations()
+    attempt_map = {sid: rec.attempt + 1 for sid, rec in existing_records.items()}
+
+    # Translation cache keyed by source_hash. Disabled for force / force-segment
+    # runs so those genuinely re-translate. Seeded only from clean completed
+    # records (never failed or quality_failed).
+    use_cache = not (force or force_segments)
+    cache: dict[str, tuple[str, str, str]] = {}
+    in_flight: dict[str, asyncio.Event] = {}
+    if use_cache:
+        seg_by_id = {seg.segment_id: seg for seg in all_segments}
+        for sid, rec in existing_records.items():
+            seg = seg_by_id.get(sid)
+            if seg is not None and _is_cacheable_translation(seg, rec, config):
+                cache.setdefault(rec.source_hash, (rec.segment_id, rec.translation, rec.model))
+        logger.info("Cache seeded with %d clean translation(s)", len(cache))
 
     tasks = [
         _translate_one(
@@ -254,6 +363,9 @@ async def run_translation(
             recent_completed=recent_completed,
             config=config,
             lock=lock,
+            cache=cache,
+            in_flight=in_flight,
+            use_cache=use_cache,
         )
         for seg in pending
     ]

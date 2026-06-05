@@ -37,7 +37,7 @@ async def test_successful_translation_through_scheduler():
     provider = MockTranslationProvider()
     scheduler = TranslationScheduler(provider, LimitsConfig(rpm=60, concurrency=2), max_retries=2)
     response = await scheduler.translate(make_request())
-    assert "[譯]" in response.translated_text
+    assert "（譯）" in response.translated_text
 
 
 @pytest.mark.asyncio
@@ -46,7 +46,7 @@ async def test_retries_on_rate_limit_error():
     scheduler = TranslationScheduler(provider, LimitsConfig(rpm=60, concurrency=2), max_retries=3)
     response = await scheduler.translate(make_request())
     assert provider.call_count == 3
-    assert "[譯]" in response.translated_text
+    assert "（譯）" in response.translated_text
 
 
 @pytest.mark.asyncio

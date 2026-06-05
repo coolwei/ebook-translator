@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .models import JobState, Segment, TranslationRecord
@@ -51,37 +50,18 @@ class CheckpointManager:
         return segments
 
     def load_completed_ids(self) -> set[str]:
-        completed = set()
-        if not self._translations_path.exists():
-            return completed
-        for line in self._translations_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                if data.get("status") == "completed":
-                    completed.add(data["segment_id"])
-            except Exception:
-                continue
-        return completed
+        return {
+            sid
+            for sid, record in self.load_all_translations().items()
+            if record.status == "completed"
+        }
 
     def load_failed_ids(self) -> dict[str, int]:
-        failed: dict[str, int] = {}
-        if not self._translations_path.exists():
-            return failed
-        for line in self._translations_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                if data.get("status") == "failed":
-                    sid = data["segment_id"]
-                    failed[sid] = max(failed.get(sid, 0), data.get("attempt", 1))
-            except Exception:
-                continue
-        return failed
+        return {
+            sid: record.attempt
+            for sid, record in self.load_all_translations().items()
+            if record.status == "failed"
+        }
 
     def load_all_translations(self) -> dict[str, TranslationRecord]:
         records: dict[str, TranslationRecord] = {}

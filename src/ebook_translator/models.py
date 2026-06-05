@@ -20,12 +20,15 @@ class Segment(BaseModel):
 class TranslationRecord(BaseModel):
     segment_id: str
     source_hash: str
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "failed", "quality_failed"]
     source: str
     translation: str
     model: str
     attempt: int
     error: str | None = None
+    # Set when this record reused a cached translation from another segment with
+    # the same source_hash (no provider call was made).
+    reused_from_segment_id: str | None = None
     created_at: datetime
 
 

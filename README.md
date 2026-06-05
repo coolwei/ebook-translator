@@ -1,5 +1,41 @@
 # ebook-translator
 
+## Phase 5: Translation Cache, Quality Gate, Force Controls
+
+翻譯流程預設會優先保護已完成成果並降低 API 成本：
+
+- `completed` segment 預設不會重翻。
+- 相同 `source_hash` 若已有 `completed` 且 quality checks 乾淨的翻譯，後續相同原文會直接重用 cache，不呼叫 provider。
+- cache hit 仍會 append 一筆新的 `translations.jsonl` record，並以 `reused_from_segment_id` 追蹤來源 segment。
+- `failed` 與 `quality_failed` record 不會被 cache 重用。
+- `validate`、`export` 都以每個 segment 最新的 record 為準。
+
+Provider 回傳譯文後會先通過 quality gate，通過才會標記為 `completed`。目前 gate 會拒絕：
+
+- `simplified_chinese`：輸出含簡體字。
+- `added_prefix`：模型自行加上章節、段落或括號式前綴。
+- `markdown_fence`：輸出含 Markdown code fence。
+- `explanation_prefix`：輸出以說明文字開頭，例如 `Here is the translation:`。
+
+命中 quality gate 的 record 會標記為 `quality_failed`，不算 completed，也不會進 cache。
+
+重試與重翻控制：
+
+```bash
+# 只重試 failed segments，不重翻 completed
+ebook-translator retry-failed outputs/<book> --config config.yaml --limit 5
+
+# 只重試 quality_failed 或舊 completed 但 quality check 不乾淨的 segments
+ebook-translator retry-quality-failed outputs/<book> --config config.yaml --limit 5
+
+# 強制重翻全部 segments，append 新 record，不覆蓋舊 record
+ebook-translator translate --config config.yaml --force
+
+# 只強制重翻指定 segment；可重複或用逗號分隔
+ebook-translator translate --config config.yaml --force-segment 0000:0001:abcd
+ebook-translator translate --config config.yaml --force-segment 0000:0001:abcd,0000:0002:ef01
+```
+
 雙語 EPUB 翻譯 CLI 工具。將 EPUB 電子書翻譯成原文在上、譯文在下的雙語格式。
 
 ## 功能
