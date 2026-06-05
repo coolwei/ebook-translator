@@ -1,0 +1,35 @@
+# Secrets
+.env
+*.env
+
+# Config with real credentials
+config.yaml
+
+# Data
+books/
+outputs/
+jobs/
+*.epub
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp

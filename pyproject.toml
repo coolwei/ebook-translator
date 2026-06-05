@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ebook-translator"
+version = "0.1.0"
+description = "Bilingual EPUB translation CLI"
+requires-python = ">=3.11"
+dependencies = [
+    "typer[all]>=0.12.0",
+    "pydantic>=2.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "ebooklib>=0.18",
+    "tenacity>=8.2.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+ebook-translator = "ebook_translator.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-httpx>=0.30",
+    "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ebook_translator"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::bs4.XMLParsedAsHTMLWarning"]
+
+[tool.coverage.run]
+source = ["src/ebook_translator"]

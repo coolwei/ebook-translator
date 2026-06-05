@@ -1,0 +1,46 @@
+project:
+  name: ebook-translator
+  output_dir: outputs
+  jobs_dir: jobs
+
+input:
+  path: books/example.epub
+
+translation:
+  source_language: auto
+  target_language: zh-TW
+  bilingual_mode: original_above_translation
+  preserve_html_tags: true
+  preserve_footnotes: true
+  skip_existing: true
+
+provider:
+  type: openai_compatible
+  base_url: "https://your-api.example.com/v1"
+  api_key_env: "TRANSLATION_API_KEY"
+  model: "your-model-name"
+  timeout_seconds: 120
+
+limits:
+  rpm: 30
+  concurrency: 2
+  max_context_tokens: 32000
+  max_output_tokens: 4000
+  max_chars_per_chunk: 6000
+
+resume:
+  enabled: true
+  checkpoint_every_segments: 1
+  retry_failed: true
+  max_retries: 3
+
+logging:
+  level: info
+  save_prompt: false
+  save_response: true
+
+quality:
+  validate_empty_translation: true
+  validate_untranslated_ratio: true
+  validate_html_integrity: true
+  max_length_ratio: 3.0
