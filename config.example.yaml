@@ -16,17 +16,17 @@ translation:
 
 provider:
   type: openai_compatible
-  base_url: "https://your-api.example.com/v1"
+  base_url: "https://ai-lab.9767496.xyz/v1"
   api_key_env: "TRANSLATION_API_KEY"
-  model: "your-model-name"
+  model: "nvidia-3_step-3.7-flash"
   timeout_seconds: 120
 
 limits:
-  rpm: 30
-  concurrency: 2
+  rpm: 10
+  concurrency: 1
   max_context_tokens: 32000
-  max_output_tokens: 4000
-  max_chars_per_chunk: 6000
+  max_output_tokens: 2000
+  max_chars_per_chunk: 2000
 
 resume:
   enabled: true

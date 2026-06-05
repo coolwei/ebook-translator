@@ -108,6 +108,20 @@ def check_missing_urls(segment: Segment, record: TranslationRecord) -> Validatio
     return None
 
 
+def check_record_status(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
+    if record.status == "completed":
+        return None
+    detail = "Translation did not complete."
+    if record.error:
+        detail = f"{detail} Error: {record.error}"
+    return ValidationIssue(
+        segment_id=segment.segment_id,
+        check="translation_failed",
+        severity="error",
+        detail=detail,
+    )
+
+
 def validate_translations(
     pairs: list[tuple[Segment, TranslationRecord]],
     config: QualityConfig,
@@ -116,6 +130,9 @@ def validate_translations(
 
     for segment, record in pairs:
         if record.status != "completed":
+            issue = check_record_status(segment, record)
+            if issue:
+                issues.append(issue)
             continue
 
         if config.validate_empty_translation:

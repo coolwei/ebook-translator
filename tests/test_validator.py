@@ -12,6 +12,7 @@ from ebook_translator.validator import (
     check_identical,
     check_length_ratio,
     check_missing_urls,
+    check_record_status,
     validate_translations,
 )
 
@@ -108,6 +109,13 @@ def test_check_missing_urls_passes_when_present():
     assert check_missing_urls(seg, rec) is None
 
 
+def test_check_record_status_detects_failed_translation():
+    issue = check_record_status(make_segment(), make_record("", status="failed"))
+    assert issue is not None
+    assert issue.check == "translation_failed"
+    assert issue.severity == "error"
+
+
 def test_validate_translations_aggregates():
     cfg = QualityConfig()
     seg = make_segment()
@@ -132,10 +140,10 @@ def test_validate_translations_aggregates():
     assert report.errors >= 1
 
 
-def test_validate_skips_failed_records():
+def test_validate_reports_failed_records():
     cfg = QualityConfig()
     seg = make_segment()
     rec = make_record("", status="failed")  # failed, not completed
     report = validate_translations([(seg, rec)], cfg)
-    # Failed records are skipped; no issues raised
-    assert report.errors == 0
+    assert report.errors == 1
+    assert report.issues[0].check == "translation_failed"

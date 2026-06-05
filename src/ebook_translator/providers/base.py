@@ -37,6 +37,10 @@ class AuthError(ProviderError):
     pass
 
 
+class FatalProviderError(ProviderError):
+    pass
+
+
 class ContextLengthError(ProviderError):
     pass
 

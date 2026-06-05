@@ -10,6 +10,7 @@ from ebook_translator.models import Segment
 from ebook_translator.providers.base import (
     AuthError,
     ContextLengthError,
+    FatalProviderError,
     ProviderError,
     RateLimitError,
     TranslationRequest,
@@ -112,6 +113,18 @@ async def test_403_raises_auth_error(httpx_mock):
 
 
 @pytest.mark.asyncio
+async def test_404_raises_fatal_provider_error(httpx_mock):
+    httpx_mock.add_response(
+        status_code=404,
+        json={"error": {"message": "Not found"}},
+    )
+    provider = make_provider()
+    with pytest.raises(FatalProviderError):
+        await provider.translate(make_request())
+    await provider.close()
+
+
+@pytest.mark.asyncio
 async def test_429_raises_rate_limit_error(httpx_mock):
     httpx_mock.add_response(
         status_code=429,
@@ -131,6 +144,23 @@ async def test_500_raises_provider_error(httpx_mock):
     )
     provider = make_provider()
     with pytest.raises(ProviderError):
+        await provider.translate(make_request())
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_message_content_raises_provider_error(httpx_mock):
+    response = dict(SUCCESSFUL_RESPONSE)
+    response["choices"] = [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": None},
+            "finish_reason": "stop",
+        }
+    ]
+    httpx_mock.add_response(json=response)
+    provider = make_provider()
+    with pytest.raises(ProviderError, match="empty message content"):
         await provider.translate(make_request())
     await provider.close()
 

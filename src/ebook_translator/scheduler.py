@@ -16,6 +16,7 @@ from .config import LimitsConfig
 from .providers.base import (
     AuthError,
     ContextLengthError,
+    FatalProviderError,
     ProviderError,
     RateLimitError,
     TranslationProvider,
@@ -61,7 +62,7 @@ class TranslationScheduler:
                 async for attempt in AsyncRetrying(
                     retry=retry_if_exception(
                         lambda exc: isinstance(exc, (RateLimitError, ProviderError))
-                        and not isinstance(exc, (AuthError, ContextLengthError))
+                        and not isinstance(exc, (AuthError, ContextLengthError, FatalProviderError))
                     ),
                     stop=stop_after_attempt(self._max_retries),
                     wait=wait_exponential(multiplier=1, min=2, max=60),
@@ -69,7 +70,7 @@ class TranslationScheduler:
                 ):
                     with attempt:
                         return await self._provider.translate(request)
-            except (AuthError, ContextLengthError):
+            except (AuthError, ContextLengthError, FatalProviderError):
                 raise
             except (RateLimitError, ProviderError) as exc:
                 raise

@@ -6,6 +6,7 @@ from ..config import ProviderConfig
 from .base import (
     AuthError,
     ContextLengthError,
+    FatalProviderError,
     ProviderError,
     RateLimitError,
     TranslationProvider,
@@ -56,9 +57,12 @@ class OpenAICompatibleProvider(TranslationProvider):
 
         data = response.json()
         choice = data["choices"][0]
+        content = choice.get("message", {}).get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderError("Provider returned empty message content")
         usage = data.get("usage", {})
         return TranslationResponse(
-            translated_text=choice["message"]["content"].strip(),
+            translated_text=content.strip(),
             model=data.get("model", request.model),
             finish_reason=choice.get("finish_reason", ""),
             prompt_tokens=usage.get("prompt_tokens", 0),
@@ -74,6 +78,8 @@ class OpenAICompatibleProvider(TranslationProvider):
 
         if status_code in (401, 403):
             return AuthError(f"Authentication failed ({status_code}): {message}")
+        if status_code == 404:
+            return FatalProviderError(f"Provider endpoint not found (404): {message}")
         if status_code == 429:
             return RateLimitError(f"Rate limit exceeded: {message}")
         if status_code == 400:

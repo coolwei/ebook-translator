@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from ebook_translator.config import LimitsConfig
-from ebook_translator.providers.base import AuthError, RateLimitError, TranslationResponse
+from ebook_translator.providers.base import AuthError, FatalProviderError, ProviderError, RateLimitError, TranslationResponse
 from ebook_translator.scheduler import RateLimiter, TranslationScheduler
 from tests.conftest import MockTranslationProvider, make_sample_config
 
@@ -50,10 +50,28 @@ async def test_retries_on_rate_limit_error():
 
 
 @pytest.mark.asyncio
+async def test_retries_on_provider_error():
+    provider = MockTranslationProvider(fail_first_n=2, fail_with=ProviderError)
+    scheduler = TranslationScheduler(provider, LimitsConfig(rpm=60, concurrency=2), max_retries=3)
+    response = await scheduler.translate(make_request())
+    assert provider.call_count == 3
+    assert response.translated_text
+
+
+@pytest.mark.asyncio
 async def test_auth_error_propagates_immediately():
     provider = MockTranslationProvider(fail_first_n=99, fail_with=AuthError)
     scheduler = TranslationScheduler(provider, LimitsConfig(rpm=60, concurrency=2), max_retries=3)
     with pytest.raises(AuthError):
+        await scheduler.translate(make_request())
+    assert provider.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fatal_provider_error_propagates_immediately():
+    provider = MockTranslationProvider(fail_first_n=99, fail_with=FatalProviderError)
+    scheduler = TranslationScheduler(provider, LimitsConfig(rpm=60, concurrency=2), max_retries=3)
+    with pytest.raises(FatalProviderError):
         await scheduler.translate(make_request())
     assert provider.call_count == 1
 
