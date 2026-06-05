@@ -284,3 +284,156 @@ def test_quality_failed_does_not_include_hard_failed():
     seg = make_segment()
     failed = make_record("", status="failed")  # hard failure, not a quality issue
     assert quality_failed_segment_ids([(seg, failed)], cfg) == set()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: detect_untranslated_text
+# ---------------------------------------------------------------------------
+
+def test_detect_untranslated_text_flags_english_echo():
+    """If the translation is still English (high ASCII ratio), it should be flagged."""
+    from ebook_translator.validator import detect_untranslated_text
+    seg = make_segment("The quick brown fox jumps over the lazy dog.")
+    rec = make_record("The quick brown fox jumps over the lazy dog.")  # echoed source
+    issue = detect_untranslated_text(seg, rec)
+    assert issue is not None
+    assert issue.check == "untranslated_text"
+    assert issue.severity == "error"
+
+
+def test_detect_untranslated_text_passes_chinese_translation():
+    """A proper Chinese translation must not be flagged."""
+    from ebook_translator.validator import detect_untranslated_text
+    seg = make_segment("The quick brown fox jumps over the lazy dog.")
+    rec = make_record("那隻敏捷的棕色狐狸跳過了懶惰的狗。")
+    assert detect_untranslated_text(seg, rec) is None
+
+
+def test_detect_untranslated_text_ignores_cjk_source():
+    """If the source is already CJK-dominant, skip the check (no false positives)."""
+    from ebook_translator.validator import detect_untranslated_text
+    seg = make_segment("這是一段中文文字。")
+    rec = make_record("This would look suspicious but source is CJK so skip.")
+    assert detect_untranslated_text(seg, rec) is None
+
+
+def test_detect_untranslated_text_partial_english_below_threshold():
+    """A translation that mixes CJK with some English proper nouns (< threshold) passes."""
+    from ebook_translator.validator import detect_untranslated_text
+    seg = make_segment("Winston Smith walked into the room.")
+    # ~50% ASCII letters — below default 0.75 threshold
+    rec = make_record("溫斯頓·史密斯 walked into 房間。")
+    assert detect_untranslated_text(seg, rec) is None
+
+
+def test_quality_gate_completed_english_echo_marked_quality_failed():
+    """quality_failed_segment_ids must catch a completed-but-untranslated segment."""
+    cfg = QualityConfig()
+    seg = make_segment("The quick brown fox jumps over the lazy dog.")
+    rec = make_record("The quick brown fox jumps over the lazy dog.", status="completed")
+    # Should be flagged as quality_failed (untranslated_text check)
+    result = quality_failed_segment_ids([(seg, rec)], cfg)
+    assert seg.segment_id in result
+
+
+def test_validate_translations_flags_english_echo_as_error():
+    """validate_translations must surface the untranslated_text issue as an error."""
+    cfg = QualityConfig()
+    seg = make_segment("The quick brown fox jumps over the lazy dog.")
+    rec = make_record("The quick brown fox jumps over the lazy dog.", status="completed")
+    report = validate_translations([(seg, rec)], cfg)
+    checks = {i.check for i in report.issues}
+    assert "untranslated_text" in checks
+    assert any(i.severity == "error" for i in report.issues if i.check == "untranslated_text")
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: missing_translation_report
+# ---------------------------------------------------------------------------
+
+def _make_spine_doc(html: str, href: str = "chap01.xhtml") :
+    from ebook_translator.epub.reader import SpineDocument
+    return SpineDocument(
+        chapter_index=0,
+        item_id="item1",
+        href=href,
+        content=html.encode("utf-8"),
+        media_type="application/xhtml+xml",
+    )
+
+
+def test_missing_report_finds_failed_block(tmp_path):
+    """build_missing_translation_report must include a failed translation."""
+    from datetime import datetime, timezone
+    from ebook_translator.missing_report import build_missing_translation_report, REASON_FAILED
+    from ebook_translator.models import TranslationRecord
+    from ebook_translator.segmenter.segmenter import segment_document
+
+    html = "<html><body><p>Hello world.</p></body></html>"
+    doc = _make_spine_doc(html)
+    segs = segment_document(doc)
+    assert len(segs) == 1
+    seg = segs[0]
+
+    rec = TranslationRecord(
+        segment_id=seg.segment_id,
+        source_hash=seg.sha1_prefix,
+        status="failed",
+        source=seg.source_html,
+        translation="",
+        model="mock",
+        attempt=1,
+        error="Provider returned empty message content",
+        created_at=datetime.now(timezone.utc),
+    )
+    translations = {seg.segment_id: rec}
+
+    report = build_missing_translation_report([doc], segs, translations)
+    assert len(report) == 1
+    entry = report[0]
+    assert entry["reason"] == REASON_FAILED
+    assert entry["has_segment"] is True
+    assert entry["segment_id"] == seg.segment_id
+    assert "Hello world" in entry["source_text"]
+
+
+def test_missing_report_finds_no_segment_block(tmp_path):
+    """build_missing_translation_report must report blocks that had no segment at all."""
+    from ebook_translator.missing_report import build_missing_translation_report, REASON_NO_SEGMENT
+
+    html = "<html><body><p>Unextracted paragraph.</p></body></html>"
+    doc = _make_spine_doc(html)
+    # Pass empty segment list — simulates a segmenter miss
+    report = build_missing_translation_report([doc], [], {})
+    assert len(report) == 1
+    entry = report[0]
+    assert entry["reason"] == REASON_NO_SEGMENT
+    assert entry["has_segment"] is False
+    assert entry["segment_id"] is None
+
+
+def test_missing_report_excludes_completed_blocks(tmp_path):
+    """Blocks with a completed translation must NOT appear in the report."""
+    from datetime import datetime, timezone
+    from ebook_translator.missing_report import build_missing_translation_report
+    from ebook_translator.models import TranslationRecord
+    from ebook_translator.segmenter.segmenter import segment_document
+
+    html = "<html><body><p>Successfully translated.</p></body></html>"
+    doc = _make_spine_doc(html)
+    segs = segment_document(doc)
+    seg = segs[0]
+
+    rec = TranslationRecord(
+        segment_id=seg.segment_id,
+        source_hash=seg.sha1_prefix,
+        status="completed",
+        source=seg.source_html,
+        translation="成功翻譯。",
+        model="mock",
+        attempt=1,
+        created_at=datetime.now(timezone.utc),
+    )
+    report = build_missing_translation_report([doc], segs, {seg.segment_id: rec})
+    assert report == [], f"Expected empty report, got: {report}"
+

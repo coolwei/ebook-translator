@@ -68,6 +68,58 @@ def check_identical(segment: Segment, record: TranslationRecord) -> ValidationIs
     return None
 
 
+_ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _ascii_letter_ratio(text: str) -> float:
+    """Fraction of characters in *text* that are ASCII letters (A-Z / a-z)."""
+    total = len(text)
+    if total == 0:
+        return 0.0
+    return len(_ASCII_LETTER_RE.findall(text)) / total
+
+
+def detect_untranslated_text(
+    segment: Segment,
+    record: TranslationRecord,
+    ascii_threshold: float = 0.75,
+) -> ValidationIssue | None:
+    """Flag a translation that is still predominantly in the source language.
+
+    Heuristic: if the translation contains a very high proportion of ASCII
+    letters (> ``ascii_threshold``) AND the source text is also ASCII-heavy
+    (so we don't falsely flag translations of code/URLs/numbers), the model
+    most likely echoed or produced the original English text verbatim.
+
+    The check is intentionally lenient (default 0.75) to avoid false positives
+    on bilingual segments that mix CJK with some English proper nouns.
+    """
+    trg = record.translation.strip()
+    if not trg:
+        return None  # empty_translation check handles this
+    src = segment.source_text.strip()
+    if not src:
+        return None
+
+    # Only apply when source is also ASCII-heavy (i.e. an English source).
+    src_ratio = _ascii_letter_ratio(src)
+    if src_ratio < 0.5:
+        return None  # Source is not ASCII-dominant; skip.
+
+    trg_ratio = _ascii_letter_ratio(trg)
+    if trg_ratio >= ascii_threshold:
+        return ValidationIssue(
+            segment_id=segment.segment_id,
+            check="untranslated_text",
+            severity="error",
+            detail=(
+                f"Translation appears to be in the source language "
+                f"(ASCII-letter ratio {trg_ratio:.0%} ≥ threshold {ascii_threshold:.0%})."
+            ),
+        )
+    return None
+
+
 def check_length_ratio(
     segment: Segment, record: TranslationRecord, max_ratio: float
 ) -> ValidationIssue | None:
@@ -268,6 +320,9 @@ def check_quality(
     if config.validate_explanation_prefix:
         if (i := detect_explanation_prefix(segment, rec)):
             issues.append(i)
+    if config.validate_untranslated_text:
+        if (i := detect_untranslated_text(segment, rec, config.untranslated_ascii_threshold)):
+            issues.append(i)
     return issues
 
 
@@ -335,6 +390,11 @@ def validate_translations(
             if issue:
                 issues.append(issue)
 
+        if config.validate_untranslated_text:
+            issue = detect_untranslated_text(segment, record, config.untranslated_ascii_threshold)
+            if issue:
+                issues.append(issue)
+
     total = len(pairs)
     warnings = sum(1 for i in issues if i.severity == "warning")
     errors = sum(1 for i in issues if i.severity == "error")
@@ -351,7 +411,7 @@ def validate_translations(
 # Checks that indicate a translation completed but is unacceptable quality and
 # therefore eligible for a quality-failed retry (as opposed to a hard failure).
 QUALITY_CHECKS = frozenset(
-    {"simplified_chinese", "added_prefix", "markdown_fence", "explanation_prefix"}
+    {"simplified_chinese", "added_prefix", "markdown_fence", "explanation_prefix", "untranslated_text"}
 )
 
 

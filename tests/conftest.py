@@ -107,11 +107,14 @@ class MockTranslationProvider(TranslationProvider):
         if self.call_count <= self._fail_first_n:
             raise self._fail_with("mock error")
 
-        # Clean Traditional output (suffix marker) that passes the quality gate.
+        # Clean Traditional-Chinese output that passes all quality gates
+        # (CJK-dominant, no Simplified chars, no prefix/fence/explanation).
+        # Include the sha1_prefix for per-segment uniqueness while keeping the
+        # ASCII-letter ratio well below the 0.75 untranslated_text threshold.
         text = (
             self._translation_fn(request.user_message)
             if self._translation_fn
-            else f"{request.segment.source_text[:50]}（譯）"
+            else f"這是已翻譯的內容（{request.segment.sha1_prefix}）"
         )
         return TranslationResponse(
             translated_text=text,

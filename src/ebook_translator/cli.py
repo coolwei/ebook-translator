@@ -263,3 +263,40 @@ def export(
     # Export only re-renders from the checkpoint; no API key needed.
     cfg = _load_config_or_exit(config, require_api_key=False)
     run_export(job, cfg)
+
+
+@app.command(name="report-missing")
+def report_missing(
+    job: Path = typer.Argument(..., help="Path to job output directory (contains state.json / segments.jsonl)"),
+    config: Path = typer.Option(..., "--config", "-c", help="Path to config YAML file"),
+) -> None:
+    """Generate missing_translation_report.json for a job directory.
+
+    Reads the original EPUB (from config.input.path), cross-references every
+    translatable block against the job's segments.jsonl / translations.jsonl,
+    writes missing_translation_report.json into the job directory, and prints
+    a summary table.
+
+    No API key is required — no provider calls are made.
+    """
+    from .translator import run_report_missing
+
+    if not job.is_dir():
+        typer.echo(f"Directory not found: {job}", err=True)
+        raise typer.Exit(1)
+
+    if not (job / "segments.jsonl").exists():
+        typer.echo(
+            f"No segments.jsonl found in {job}. Run 'translate' first.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # No API key needed — report-missing never calls a provider.
+    cfg = _load_config_or_exit(config, require_api_key=False)
+
+    try:
+        run_report_missing(job, cfg.input.path)
+    except Exception as exc:
+        typer.echo(f"report-missing failed: {exc}", err=True)
+        raise typer.Exit(1)

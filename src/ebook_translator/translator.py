@@ -494,3 +494,52 @@ def run_inspect(config: AppConfig) -> None:
         print(f"  [{doc.chapter_index:04d}] {doc.href}: {len(segs)} segments")
 
     print(f"Total segments: {total_segments}")
+
+
+def run_report_missing(job_dir: Path, epub_path: Path) -> None:
+    """Generate missing_translation_report.json for an existing job.
+
+    Reads the EPUB at *epub_path*, cross-references every translatable block
+    against the segments.jsonl / translations.jsonl stored in *job_dir*, and
+    writes ``missing_translation_report.json`` to *job_dir*.
+
+    Prints a human-readable summary to stdout.  Never calls any provider.
+    """
+    from .missing_report import build_missing_translation_report, save_missing_translation_report
+
+    checkpoint = CheckpointManager(job_dir)
+    segments = checkpoint.load_segments()
+    translations = checkpoint.load_all_translations()
+
+    _, spine_docs = read_epub(epub_path)
+
+    report = build_missing_translation_report(spine_docs, segments, translations)
+    out_path = save_missing_translation_report(report, job_dir)
+
+    # --- count translatable blocks in the original EPUB ---
+    from .segmenter.segmenter import iter_translatable_blocks
+    from bs4 import BeautifulSoup
+    total_blocks = 0
+    for doc in spine_docs:
+        soup = BeautifulSoup(doc.content, "lxml")
+        total_blocks += sum(1 for _ in iter_translatable_blocks(soup))
+
+    missing_count = len(report)
+
+    # tally reasons
+    reason_counts: dict[str, int] = {}
+    for entry in report:
+        r = entry["reason"]
+        reason_counts[r] = reason_counts.get(r, 0) + 1
+
+    # --- console output ---
+    print(f"Missing translation report: {out_path}")
+    print(f"  total_checked_blocks : {total_blocks}")
+    print(f"  missing_count        : {missing_count}")
+    if reason_counts:
+        print("  breakdown by reason:")
+        for reason, count in sorted(reason_counts.items()):
+            print(f"    {reason:<30s}: {count}")
+    else:
+        print("  (all blocks translated — nothing missing)")
+

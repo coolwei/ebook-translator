@@ -74,6 +74,9 @@ class QualityConfig(BaseModel):
     validate_added_prefix: bool = True
     validate_markdown_fence: bool = True
     validate_explanation_prefix: bool = True
+    # Untranslated-text detection (Phase 6)
+    validate_untranslated_text: bool = True
+    untranslated_ascii_threshold: float = 0.75
 
 
 class ContextConfig(BaseModel):

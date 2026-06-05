@@ -130,3 +130,117 @@ def test_data_segment_id_injected():
     # Instead verify all segments have data embedded in their id
     for s in segs:
         assert ":" in s.segment_id
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: new tag coverage tests
+# ---------------------------------------------------------------------------
+
+DIV_DIRECT_TEXT_HTML = b"""
+<html><body>
+  <div>Direct text inside div should be extracted.</div>
+</body></html>
+"""
+
+DIV_WITH_P_HTML = b"""
+<html><body>
+  <div><p>Paragraph inside div.</p></div>
+</body></html>
+"""
+
+TD_TH_HTML = b"""
+<html><body>
+  <table>
+    <tr><th>Header cell.</th><td>Data cell.</td></tr>
+  </table>
+</body></html>
+"""
+
+FIGCAPTION_HTML = b"""
+<html><body>
+  <figure>
+    <img src="img.png" alt="photo"/>
+    <figcaption>Caption text for the figure.</figcaption>
+  </figure>
+</body></html>
+"""
+
+CAPTION_HTML = b"""
+<html><body>
+  <table>
+    <caption>Table caption text.</caption>
+    <tr><td>Cell content.</td></tr>
+  </table>
+</body></html>
+"""
+
+DT_DD_HTML = b"""
+<html><body>
+  <dl>
+    <dt>Term one.</dt>
+    <dd>Definition one.</dd>
+  </dl>
+</body></html>
+"""
+
+DIV_NO_TEXT_HTML = b"""
+<html><body>
+  <div><span></span></div>
+</body></html>
+"""
+
+
+def test_div_direct_text_extracted():
+    """A div whose only content is a bare text string should be segmented."""
+    segs = segment_document(make_doc(DIV_DIRECT_TEXT_HTML))
+    texts = [s.source_text for s in segs]
+    assert any("Direct text inside div" in t for t in texts), f"Got: {texts}"
+
+
+def test_div_wrapping_p_not_duplicated():
+    """A div that wraps a <p> must NOT create a second segment for the outer div."""
+    segs = segment_document(make_doc(DIV_WITH_P_HTML))
+    # Exactly one segment (the <p>), not two
+    assert len(segs) == 1
+    assert "Paragraph inside div" in segs[0].source_text
+
+
+def test_td_th_extracted():
+    """<td> and <th> cells must both be segmented."""
+    segs = segment_document(make_doc(TD_TH_HTML))
+    texts = [s.source_text for s in segs]
+    assert any("Header cell" in t for t in texts), f"Got: {texts}"
+    assert any("Data cell" in t for t in texts), f"Got: {texts}"
+
+
+def test_figcaption_inside_figure_extracted():
+    """<figcaption> inside <figure> must not be silently skipped.
+
+    Previously 'figure' was in SKIP_CONTAINERS, which caused figcaption to
+    be dropped even though it carries visible translatable text.
+    """
+    segs = segment_document(make_doc(FIGCAPTION_HTML))
+    texts = [s.source_text for s in segs]
+    assert any("Caption text for the figure" in t for t in texts), f"Got: {texts}"
+
+
+def test_table_caption_extracted():
+    """<caption> elements in tables must be segmented."""
+    segs = segment_document(make_doc(CAPTION_HTML))
+    texts = [s.source_text for s in segs]
+    assert any("Table caption text" in t for t in texts), f"Got: {texts}"
+
+
+def test_dt_dd_extracted():
+    """<dt> and <dd> elements in definition lists must be segmented."""
+    segs = segment_document(make_doc(DT_DD_HTML))
+    texts = [s.source_text for s in segs]
+    assert any("Term one" in t for t in texts), f"Got: {texts}"
+    assert any("Definition one" in t for t in texts), f"Got: {texts}"
+
+
+def test_div_with_no_direct_text_not_extracted():
+    """A div containing only whitespace/empty children should not produce a segment."""
+    segs = segment_document(make_doc(DIV_NO_TEXT_HTML))
+    assert len(segs) == 0
+

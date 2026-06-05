@@ -3,14 +3,32 @@ from __future__ import annotations
 import hashlib
 import re
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from ..epub.reader import SpineDocument
 from ..models import Segment
 
 
-TRANSLATABLE_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "td", "th", "figcaption"}
-SKIP_CONTAINERS = {"nav", "aside", "script", "style", "figure"}
+# Tags whose *own* text content should be translated (leaf-level blocks).
+# figcaption is included here; note that 'figure' has been removed from
+# SKIP_CONTAINERS so figcaption inside <figure> is no longer silently dropped.
+TRANSLATABLE_TAGS = {
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "li", "blockquote",
+    "td", "th",
+    "figcaption",
+    "caption",   # <table><caption>
+    "dt", "dd",  # definition list terms / descriptions
+}
+
+# Containers whose *entire subtree* should be skipped (navigation, code, etc.).
+# 'figure' has been intentionally removed so figcaption is reachable.
+SKIP_CONTAINERS = {"nav", "aside", "script", "style"}
+
+# Tags that may carry direct visible text children (not already caught by a
+# block-level child).  We harvest NavigableString children directly so we don't
+# create duplicate segments for text already inside a nested translatable tag.
+DIV_LIKE_TAGS = {"div", "section", "article", "main", "header", "footer"}
 
 
 def normalize_text(text: str) -> str:
@@ -30,13 +48,31 @@ def _is_inside_skip_container(tag: Tag) -> bool:
     return False
 
 
+def _has_direct_text(tag: Tag) -> bool:
+    """Return True if *tag* contains at least one non-whitespace NavigableString
+    that is a direct child (not nested inside another element)."""
+    for child in tag.children:
+        if isinstance(child, NavigableString) and child.strip():
+            return True
+    return False
+
+
 def iter_translatable_blocks(soup: BeautifulSoup):
     """Yield (block_index, tag, normalized_text) for each translatable block.
 
     This is the single source of truth for block ordering, shared by the
     segmenter and the renderer so segment IDs line up deterministically.
+
+    Two classes of blocks are handled:
+    1. Known block tags (TRANSLATABLE_TAGS) — the classic case.
+    2. DIV-like containers (DIV_LIKE_TAGS) that carry direct text children
+       but whose immediate children are NOT one of the TRANSLATABLE_TAGS.
+       This avoids creating duplicate segments when a div simply wraps a <p>.
     """
     block_index = 0
+    seen_tags: set[int] = set()  # id() of Tag objects already yielded
+
+    # --- Pass 1: standard translatable block tags ---
     for tag in soup.find_all(TRANSLATABLE_TAGS):
         if not isinstance(tag, Tag):
             continue
@@ -51,6 +87,31 @@ def iter_translatable_blocks(soup: BeautifulSoup):
         if tag.find_all(TRANSLATABLE_TAGS):
             continue
 
+        seen_tags.add(id(tag))
+        yield block_index, tag, text
+        block_index += 1
+
+    # --- Pass 2: div-like containers with direct (bare) text children ---
+    for tag in soup.find_all(DIV_LIKE_TAGS):
+        if not isinstance(tag, Tag):
+            continue
+        if _is_inside_skip_container(tag):
+            continue
+        if id(tag) in seen_tags:
+            continue
+        # Only harvest if the div has at least one direct text child AND
+        # does NOT already contain a proper block child (that would be
+        # translated in pass 1 and would cause a duplicate).
+        if tag.find(TRANSLATABLE_TAGS):
+            continue
+        if not _has_direct_text(tag):
+            continue
+
+        text = normalize_text(tag.get_text())
+        if not text:
+            continue
+
+        seen_tags.add(id(tag))
         yield block_index, tag, text
         block_index += 1
 

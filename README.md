@@ -16,6 +16,7 @@ Provider 回傳譯文後會先通過 quality gate，通過才會標記為 `compl
 - `added_prefix`：模型自行加上章節、段落或括號式前綴。
 - `markdown_fence`：輸出含 Markdown code fence。
 - `explanation_prefix`：輸出以說明文字開頭，例如 `Here is the translation:`。
+- `untranslated_text`：譯文 ASCII 字母比例 ≥ 0.75 且原文為英文，表示 AI 原文回顯未翻譯。
 
 命中 quality gate 的 record 會標記為 `quality_failed`，不算 completed，也不會進 cache。
 
@@ -147,6 +148,60 @@ ebook-translator validate outputs/<書名>
 - `added_prefix`：偵測模型自行加上的章節／括號前綴，例如 `【第一章：…】`
 - `markdown_fence`：偵測 Markdown 程式碼圍欄 ` ``` `
 - `explanation_prefix`：偵測「翻譯如下」「譯文：」等說明前綴
+- `untranslated_text`：偵測 AI 原文回顯（ASCII 比例過高，表示未翻譯）
+
+### 排查漏翻段落
+
+```bash
+ebook-translator report-missing outputs/<書名> --config config.yaml
+```
+
+**用途**：掃描原始 EPUB 中所有可見文字 block，對照 `segments.jsonl` 與
+`translations.jsonl`，找出哪些段落沒有成功產生譯文。
+
+**特點**：
+
+- 不呼叫任何 provider，**不需要 API key**。
+- 輸出 `outputs/<書名>/missing_translation_report.json`（每次執行覆蓋）。
+- Console 直接顯示統計摘要。
+
+**輸出範例**：
+
+```
+Missing translation report: outputs/example-book/missing_translation_report.json
+  total_checked_blocks : 13
+  missing_count        : 1
+  breakdown by reason:
+    translation_failed            : 1
+```
+
+**常見 reason 代碼**：
+
+| reason | 說明 | 建議行動 |
+|---|---|---|
+| `translation_failed` | Segment 存在，但 provider 失敗（空內容 / timeout / 5xx） | `retry-failed` |
+| `quality_failed` | Segment 存在，品質閘門拒絕（簡體 / 未翻譯等） | `retry-quality-failed` |
+| `no_translation_record` | Segment 存在，但完全沒有 translation record | `retry-failed` |
+| `no_segment_extracted` | Segmenter 未抽取此 block（tag 覆蓋不足） | 更新 segmenter 後重新翻譯 |
+
+**建議排查流程**：
+
+```bash
+# 1. 驗證翻譯品質
+ebook-translator validate outputs/<書名>
+
+# 2. 找出漏翻段落
+ebook-translator report-missing outputs/<書名> --config config.yaml
+
+# 3a. 補翻 provider 失敗的段落
+ebook-translator retry-failed outputs/<書名> --config config.yaml
+
+# 3b. 重翻品質不佳（AI 回傳英文 / 簡體 / 前綴）的段落
+ebook-translator retry-quality-failed outputs/<書名> --config config.yaml
+
+# 4. 重新匯出 EPUB
+ebook-translator export outputs/<書名> --config config.yaml
+```
 
 ### 重新匯出 EPUB
 
@@ -158,12 +213,13 @@ ebook-translator export outputs/<書名> --config config.yaml
 
 ```
 outputs/<書名>/
-├── translated.epub        # 雙語 EPUB
-├── bilingual.html         # 雙語 HTML 預覽
-├── segments.jsonl         # 所有待翻譯段落
-├── translations.jsonl     # 翻譯結果（append-only）
-├── state.json             # 作業狀態
-├── validation_report.json # 驗證報告
+├── translated.epub               # 雙語 EPUB
+├── bilingual.html                # 雙語 HTML 預覽
+├── segments.jsonl                # 所有待翻譯段落
+├── translations.jsonl            # 翻譯結果（append-only）
+├── state.json                    # 作業狀態
+├── validation_report.json        # 驗證報告
+├── missing_translation_report.json  # 漏翻報告（report-missing 產生）
 └── logs/
     ├── run.log
     └── errors.log
