@@ -88,6 +88,9 @@ _ZH_TW: dict[str, str] = {
     "status": "狀態",
     "completed": "已完成",
     "failed": "失敗",
+
+    # translator.py — model fallback
+    "model_fallback": "模型 fallback: {from_model} → {to_model}，原因: {reason}",
 }
 
 # English translation dictionary: keys → English display text
@@ -172,6 +175,9 @@ _EN: dict[str, str] = {
     "status": "Status",
     "completed": "Completed",
     "failed": "Failed",
+
+    # translator.py — model fallback
+    "model_fallback": "Model fallback: {from_model} → {to_model}, reason: {reason}",
 }
 
 

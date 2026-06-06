@@ -1,8 +1,8 @@
 # PROJECT_STATUS.md
 
-> 最後更新：2026-06-06
+> 最後更新：2026-06-07
 > 分支：`main`（與 `origin/main` 同步）
-> 測試：`189 passed`（`python -m pytest tests/ -q`）
+> 測試：見本輪 `python -m pytest tests/ -q`
 
 ---
 
@@ -35,6 +35,14 @@ Phase 1 Definition of Done：**全部達成**。
 - `openai_compatible`（async httpx）
 - `mock` provider（測試/離線用，`--mock`）
 - provider 抽象介面（base.py）
+- **`provider.fallback_models`**：primary 失敗時依序切換；成功後沿用該模型
+- **`translations.jsonl` fallback metadata**：`fallback_from`、`fallback_attempt`
+
+### Logging
+- **`logging.enabled`**：是否寫入 translation log（預設 true）
+- **`logging.file`**：全域 log 路徑（預設 `logs/translation.log`）
+- **`logging.per_book`**：另寫 `outputs/<book>/translation.log`
+- log 自動 redact API key / Bearer / Authorization / 私有 endpoint
 
 ### Quality gate（皆有測試）
 - `simplified_chinese`
@@ -124,7 +132,7 @@ Windows 啟動器 `start-ebook-translator.bat` 已改用較穩健的 `python -m 
 
 ## 7. 已知問題
 
-1. **無 large-book safe mode**（P0）：Spy.epub 全量翻譯時易出現大量 rate limit / empty content / simplified_chinese，目前無分批 / cooldown / 自動停止機制。
+1. Spy.epub 等大書仍可能因 provider 品質不穩而出現部分 `failed` / `missing`；建議搭配 **safe mode + `fallback_models` + translation log** 長時間追蹤與恢復。
 2. `missing_translation_report.json` 內容為**裸陣列** `[]`，而非含 `missing_count` 欄位的物件；count 僅在 CLI 輸出計算。屬輕微設計落差，非 bug。
 3. token 估算為粗估（`chars/3`），非真實 tokenizer（P1）。
 4. `ebook-translator` console script 在某些 shell（如本工具的 git-bash）PATH 未含 venv Scripts 時找不到；`python -m ebook_translator` 永遠可用。非程式 bug。
@@ -161,7 +169,7 @@ provider 反覆回傳 empty content 時，提供人工補翻指令。
 
 ### P2 — glossary / terminology consistency
 ### P2 — chapter context / style guide
-### P3 — multi-model fallback
+### ~~P3 — multi-model fallback~~（已完成：見 `provider.fallback_models`）
 ### P3 — GUI / Web UI（CLI 穩定後再做）
 
 ---

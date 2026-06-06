@@ -72,6 +72,58 @@ python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --bat
 python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --dry-run
 ```
 
+### Provider fallback（大書建議）
+
+當 primary model 遇到 empty content、rate limit、`quality_failed`（如 `simplified_chinese`、`untranslated_text`）時，可設定 fallback 模型依序重試同一段：
+
+```yaml
+provider:
+  model: "primary-model"
+  fallback_models:
+    - "fallback-model-1"
+    - "fallback-model-2"
+```
+
+行為摘要：
+
+- 正常時不切換；primary 成功則下一段繼續用 primary。
+- 失敗時於**同一段**依序嘗試 fallback；若 fallback 成功，**下一段起沿用該模型**（不重置回 primary）。
+- 所有模型都失敗才記錄 `failed` / `quality_failed`。
+- `translations.jsonl` 會記錄實際使用的 `model`，以及 `fallback_from`、`fallback_attempt`（若有 fallback）。
+- cache 重用不受目前模型影響；`reused_from_segment_id` 行為不變。
+
+大書建議組合 safe mode + fallback：
+
+```yaml
+limits:
+  rpm: 10
+  concurrency: 1
+
+provider:
+  model: "primary-model"
+  fallback_models:
+    - "fallback-model-1"
+    - "fallback-model-2"
+```
+
+```powershell
+python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
+```
+
+### Translation log
+
+翻譯時會持續寫入結構化 log，方便長時間追蹤進度與 fallback 行為：
+
+```yaml
+logging:
+  enabled: true
+  level: info
+  file: logs/translation.log   # 全域 log
+  per_book: true               # 另寫 outputs/<book>/translation.log
+```
+
+每筆記錄包含 `segment_id`、`model`、`status`、錯誤類型、fallback 資訊、`duration_ms` 等。log **不會**輸出 API key、Bearer token、Authorization 或完整私有 endpoint。
+
 ## CLI 語言設定
 
 CLI 輸出支援繁體中文（zh-TW）和英文（en）模式。預設為繁體中文。

@@ -59,3 +59,17 @@ def test_provider_url_stored(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_API_KEY", "sk-test")
     cfg = load_config(write_config(tmp_path, VALID_CONFIG))
     assert cfg.provider.base_url == "https://api.example.com/v1"
+
+
+def test_fallback_models_default_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_API_KEY", "sk-test")
+    cfg = load_config(write_config(tmp_path, VALID_CONFIG))
+    assert cfg.provider.fallback_models == []
+
+
+def test_logging_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_API_KEY", "sk-test")
+    cfg = load_config(write_config(tmp_path, VALID_CONFIG))
+    assert cfg.logging.enabled is True
+    assert str(cfg.logging.file).replace("\\", "/") == "logs/translation.log"
+    assert cfg.logging.per_book is True

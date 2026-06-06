@@ -176,7 +176,9 @@ def _run_safe_mode_translation(
         checkpoint = CheckpointManager(job_dir)
         completed_before = len(checkpoint.load_completed_ids())
         lines_before = translation_record_line_count(job_dir)
-        asyncio.run(run_translation(cfg, limit=batch_limit, skip_final_export=True))
+        asyncio.run(
+            run_translation(cfg, limit=batch_limit, skip_final_export=True, batch_index=batch_num)
+        )
         batch_rate_limits = count_rate_limit_errors_since(job_dir, lines_before)
         session_rate_limit_count += batch_rate_limits
         completed_after = len(checkpoint.load_completed_ids())

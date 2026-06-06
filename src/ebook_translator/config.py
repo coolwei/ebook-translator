@@ -34,6 +34,7 @@ class ProviderConfig(BaseModel):
     base_url: str
     api_key_env: str
     model: str
+    fallback_models: list[str] = Field(default_factory=list)
     timeout_seconds: int = 120
     api_key: str = Field(default="", exclude=True)
 
@@ -61,7 +62,10 @@ class ResumeConfig(BaseModel):
 
 
 class LoggingConfig(BaseModel):
+    enabled: bool = True
     level: str = "info"
+    file: Path = Path("logs/translation.log")
+    per_book: bool = True
     save_prompt: bool = False
     save_response: bool = True
 

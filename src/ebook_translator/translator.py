@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from .checkpoint import CheckpointManager
 from .config import AppConfig
 from .epub.reader import SpineDocument, read_epub
 from .epub.writer import write_bilingual_epub
+from .fallback import ModelFallbackState, should_fallback_from_exception, should_fallback_from_quality
+from .i18n import get_cli_language, t
 from .logging_setup import get_logger, setup_logging
 from .models import JobState, Segment, TranslationRecord
 from .prompt import build_system_prompt, build_user_message
@@ -18,6 +21,7 @@ from .providers.openai_compatible import OpenAICompatibleProvider
 from .renderer import build_bilingual_html, render_bilingual_documents
 from .scheduler import TranslationScheduler
 from .segmenter.segmenter import segment_all_documents
+from .translation_log import TranslationLogWriter
 from .validator import (
     check_quality,
     classify_failure,
@@ -58,6 +62,10 @@ def _get_book_name(book: object, input_path: Path) -> str:
     return _slugify(input_path.stem)
 
 
+def _print_fallback_notice(from_model: str, to_model: str, reason: str, lang: str) -> None:
+    print(t("model_fallback", lang, from_model=from_model, to_model=to_model, reason=reason))
+
+
 async def _do_translate(
     seg: Segment,
     attempt: int,
@@ -67,6 +75,11 @@ async def _do_translate(
     recent_completed: list[tuple[Segment, TranslationRecord]],
     config: AppConfig,
     lock: asyncio.Lock,
+    *,
+    fallback_state: ModelFallbackState | None = None,
+    translation_log: TranslationLogWriter | None = None,
+    book_name: str = "",
+    batch_index: int | None = None,
 ) -> TranslationRecord:
     """Call the provider for one segment and apply the quality gate.
 
@@ -75,6 +88,7 @@ async def _do_translate(
     """
     logger = get_logger()
     chapter_title = chapter_titles.get(seg.chapter_href)
+    lang = get_cli_language(config)
 
     async with lock:
         prev_window = list(recent_completed[-(config.context.previous_segments):])
@@ -82,7 +96,7 @@ async def _do_translate(
     from .providers.base import TranslationRequest
 
     user_msg = build_user_message(seg, prev_window, chapter_title, config.context)
-    request = TranslationRequest(
+    base_request = TranslationRequest(
         segment=seg,
         system_prompt=system_prompt,
         user_message=user_msg,
@@ -90,7 +104,15 @@ async def _do_translate(
         max_tokens=config.limits.max_output_tokens,
     )
 
-    def _failed(status: str, model: str, error: str, translation: str = "") -> TranslationRecord:
+    def _make_record(
+        status: str,
+        model: str,
+        error: str = "",
+        translation: str = "",
+        *,
+        fallback_from: str | None = None,
+        fallback_attempt: int | None = None,
+    ) -> TranslationRecord:
         return TranslationRecord(
             segment_id=seg.segment_id,
             source_hash=seg.sha1_prefix,
@@ -99,35 +121,179 @@ async def _do_translate(
             translation=translation,
             model=model,
             attempt=attempt,
-            error=error,
+            error=error or None,
+            fallback_from=fallback_from,
+            fallback_attempt=fallback_attempt,
             created_at=datetime.now(timezone.utc),
         )
 
-    try:
-        response = await scheduler.translate(request)
-        # Quality gate: refuse to mark unacceptable translations as completed.
-        issues = check_quality(seg, response.translated_text, config.quality)
-        if issues:
-            checks = "; ".join(i.check for i in issues)
-            logger.warning("Quality-failed %s: %s", seg.segment_id, checks)
-            return _failed("quality_failed", response.model, checks, response.translated_text)
-        logger.info("Translated %s", seg.segment_id)
-        return TranslationRecord(
+    def _log_attempt(
+        *,
+        model: str,
+        status: str,
+        error_type: str = "",
+        error_message: str = "",
+        fallback_from: str = "",
+        fallback_to: str = "",
+        duration_ms: int | None = None,
+        level: str = "INFO",
+    ) -> None:
+        if translation_log is None:
+            return
+        translation_log.log(
             segment_id=seg.segment_id,
-            source_hash=seg.sha1_prefix,
-            status="completed",
-            source=seg.source_html,
-            translation=response.translated_text,
-            model=response.model,
+            batch_index=batch_index,
+            model=model,
+            status=status,
+            error_type=error_type,
+            error_message=error_message,
+            fallback_from=fallback_from,
+            fallback_to=fallback_to,
             attempt=attempt,
-            created_at=datetime.now(timezone.utc),
+            duration_ms=duration_ms,
+            level=level,
         )
-    except (AuthError, ContextLengthError) as exc:
-        logger.error("Failed %s (fatal): %s", seg.segment_id, exc)
-        return _failed("failed", config.provider.model, str(exc))
-    except Exception as exc:
-        logger.warning("Failed %s: %s", seg.segment_id, exc)
-        return _failed("failed", config.provider.model, str(exc))
+
+    use_fallback = fallback_state is not None and fallback_state.enabled
+    models_to_try = fallback_state.models_to_try() if use_fallback else [config.provider.model]
+
+    last_status = "failed"
+    last_model = models_to_try[-1]
+    last_error = ""
+    last_translation = ""
+
+    for model_index, model in enumerate(models_to_try):
+        request = TranslationRequest(
+            segment=base_request.segment,
+            system_prompt=base_request.system_prompt,
+            user_message=base_request.user_message,
+            model=model,
+            max_tokens=base_request.max_tokens,
+            temperature=base_request.temperature,
+        )
+        previous_model = models_to_try[model_index - 1] if model_index > 0 else None
+        started = time.monotonic()
+
+        try:
+            if use_fallback:
+                response = await scheduler.translate_once(request)
+            else:
+                response = await scheduler.translate(request)
+
+            issues = check_quality(seg, response.translated_text, config.quality)
+            if issues:
+                checks = "; ".join(i.check for i in issues)
+                last_status = "quality_failed"
+                last_model = response.model
+                last_error = checks
+                last_translation = response.translated_text
+                duration_ms = int((time.monotonic() - started) * 1000)
+                _log_attempt(
+                    model=response.model,
+                    status="quality_failed",
+                    error_type="quality_failed",
+                    error_message=checks,
+                    duration_ms=duration_ms,
+                    level="WARNING",
+                )
+                if use_fallback and should_fallback_from_quality(checks):
+                    next_model = (
+                        models_to_try[model_index + 1]
+                        if model_index + 1 < len(models_to_try)
+                        else None
+                    )
+                    if next_model:
+                        _print_fallback_notice(response.model, next_model, checks, lang)
+                        _log_attempt(
+                            model=response.model,
+                            status="failed",
+                            error_type="quality_failed",
+                            error_message=checks,
+                            fallback_to=next_model,
+                            duration_ms=duration_ms,
+                            level="WARNING",
+                        )
+                        continue
+                logger.warning("Quality-failed %s: %s", seg.segment_id, checks)
+                return _make_record(
+                    "quality_failed",
+                    response.model,
+                    checks,
+                    response.translated_text,
+                )
+
+            duration_ms = int((time.monotonic() - started) * 1000)
+            if use_fallback:
+                await fallback_state.set_current(response.model)
+            _log_attempt(
+                model=response.model,
+                status="completed",
+                fallback_from=previous_model or "",
+                duration_ms=duration_ms,
+            )
+            logger.info("Translated %s", seg.segment_id)
+            return _make_record(
+                "completed",
+                response.model,
+                translation=response.translated_text,
+                fallback_from=previous_model,
+                fallback_attempt=model_index if model_index > 0 else None,
+            )
+        except (AuthError, ContextLengthError) as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            logger.error("Failed %s (fatal): %s", seg.segment_id, exc)
+            _log_attempt(
+                model=model,
+                status="failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                duration_ms=duration_ms,
+                level="ERROR",
+            )
+            return _make_record("failed", model, str(exc))
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            last_status = "failed"
+            last_model = model
+            last_error = str(exc)
+            _log_attempt(
+                model=model,
+                status="failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                duration_ms=duration_ms,
+                level="WARNING",
+            )
+            if use_fallback and should_fallback_from_exception(exc):
+                next_model = (
+                    models_to_try[model_index + 1]
+                    if model_index + 1 < len(models_to_try)
+                    else None
+                )
+                if next_model:
+                    _print_fallback_notice(model, next_model, str(exc), lang)
+                    _log_attempt(
+                        model=model,
+                        status="failed",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                        fallback_to=next_model,
+                        duration_ms=duration_ms,
+                        level="WARNING",
+                    )
+                    continue
+            logger.warning("Failed %s: %s", seg.segment_id, exc)
+            return _make_record("failed", model, str(exc))
+
+    logger.warning("Failed %s after all models: %s", seg.segment_id, last_error)
+    return _make_record(
+        last_status,
+        last_model,
+        last_error,
+        last_translation,
+        fallback_from=models_to_try[-2] if len(models_to_try) > 1 else None,
+        fallback_attempt=len(models_to_try) - 1 if len(models_to_try) > 1 else None,
+    )
 
 
 async def _translate_one(
@@ -144,6 +310,11 @@ async def _translate_one(
     cache: dict[str, tuple[str, str, str]],
     in_flight: dict[str, asyncio.Event],
     use_cache: bool,
+    *,
+    fallback_state: ModelFallbackState | None = None,
+    translation_log: TranslationLogWriter | None = None,
+    book_name: str = "",
+    batch_index: int | None = None,
 ) -> TranslationRecord:
     logger = get_logger()
     sh = seg.sha1_prefix  # source_hash cache key (hash of normalized source text)
@@ -188,7 +359,18 @@ async def _translate_one(
         translated: TranslationRecord | None = None
         try:
             translated = await _do_translate(
-                seg, attempt, scheduler, system_prompt, chapter_titles, recent_completed, config, lock
+                seg,
+                attempt,
+                scheduler,
+                system_prompt,
+                chapter_titles,
+                recent_completed,
+                config,
+                lock,
+                fallback_state=fallback_state,
+                translation_log=translation_log,
+                book_name=book_name,
+                batch_index=batch_index,
             )
         finally:
             if use_cache:
@@ -224,6 +406,7 @@ async def run_translation(
     force: bool = False,
     force_segments: set[str] | None = None,
     skip_final_export: bool = False,
+    batch_index: int | None = None,
 ) -> None:
     logger = get_logger()
 
@@ -231,6 +414,15 @@ async def run_translation(
     book_name = _get_book_name(book, config.input.path)
     output_dir = config.project.output_dir / book_name
     setup_logging(output_dir, config.logging.level)
+    translation_log = TranslationLogWriter.from_config(
+        config.logging,
+        book_name=book_name,
+        output_dir=output_dir,
+    )
+    fallback_state = ModelFallbackState(
+        config.provider.model,
+        config.provider.fallback_models,
+    )
     logger = get_logger()
 
     logger.info("Starting translation job for '%s'", book_name)
@@ -367,6 +559,10 @@ async def run_translation(
             cache=cache,
             in_flight=in_flight,
             use_cache=use_cache,
+            fallback_state=fallback_state,
+            translation_log=translation_log,
+            book_name=book_name,
+            batch_index=batch_index,
         )
         for seg in pending
     ]

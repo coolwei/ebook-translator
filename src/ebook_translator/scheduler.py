@@ -53,6 +53,11 @@ class TranslationScheduler:
         self._rate_limiter = RateLimiter(config.rpm)
         self._max_retries = max_retries
 
+    async def translate_once(self, request: TranslationRequest) -> TranslationResponse:
+        async with self._semaphore:
+            await self._rate_limiter.acquire()
+            return await self._provider.translate(request)
+
     async def translate(self, request: TranslationRequest) -> TranslationResponse:
         async with self._semaphore:
             await self._rate_limiter.acquire()

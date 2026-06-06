@@ -18,7 +18,12 @@ provider:
   type: openai_compatible
   base_url: "https://your-openai-compatible-endpoint.example.com/v1"
   api_key_env: "TRANSLATION_API_KEY"
-  model: "your-model-name"
+  model: "your-primary-model"
+  # 當 primary 遇到 empty content / rate limit / quality_failed 時，依序切換。
+  # 成功後會沿用該模型，不會每段都重置回 primary。
+  fallback_models:
+    - "your-fallback-model-1"
+    - "your-fallback-model-2"
   timeout_seconds: 120
 
 limits:
@@ -35,7 +40,10 @@ resume:
   max_retries: 3
 
 logging:
+  enabled: true
   level: info
+  file: logs/translation.log
+  per_book: true
   save_prompt: false
   save_response: true
 

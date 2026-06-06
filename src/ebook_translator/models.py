@@ -29,6 +29,8 @@ class TranslationRecord(BaseModel):
     # Set when this record reused a cached translation from another segment with
     # the same source_hash (no provider call was made).
     reused_from_segment_id: str | None = None
+    fallback_from: str | None = None
+    fallback_attempt: int | None = None
     created_at: datetime
 
 
