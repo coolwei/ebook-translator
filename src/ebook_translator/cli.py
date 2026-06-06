@@ -123,12 +123,12 @@ def _run_post_batch_workflow(
     failed_ids = checkpoint.load_failed_ids()
     if failed_ids:
         typer.echo(f"{t('retrying_failed', lang)}: {len(failed_ids)}")
-        asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
+        asyncio.run(run_translation(cfg, limit=limit, failed_only=True, skip_final_export=True))
 
     qf_ids = _quality_failed_ids(job_dir, cfg)
     if qf_ids:
         typer.echo(f"{t('retrying_quality_failed', lang)}: {len(qf_ids)}")
-        asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
+        asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True, skip_final_export=True))
 
     run_validate(job_dir, cfg)
     run_report_missing(job_dir, cfg.input.path, cfg)
@@ -176,7 +176,7 @@ def _run_safe_mode_translation(
         checkpoint = CheckpointManager(job_dir)
         completed_before = len(checkpoint.load_completed_ids())
         lines_before = translation_record_line_count(job_dir)
-        asyncio.run(run_translation(cfg, limit=batch_limit))
+        asyncio.run(run_translation(cfg, limit=batch_limit, skip_final_export=True))
         batch_rate_limits = count_rate_limit_errors_since(job_dir, lines_before)
         session_rate_limit_count += batch_rate_limits
         completed_after = len(checkpoint.load_completed_ids())

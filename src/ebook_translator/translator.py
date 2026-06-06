@@ -223,6 +223,7 @@ async def run_translation(
     quality_failed_only: bool = False,
     force: bool = False,
     force_segments: set[str] | None = None,
+    skip_final_export: bool = False,
 ) -> None:
     logger = get_logger()
 
@@ -390,27 +391,28 @@ async def run_translation(
         if seg.segment_id in all_translations
     ]
 
-    logger.info("Running validation...")
-    report = validate_translations(completed_pairs, config.quality)
-    save_validation_report(report, output_dir)
-    logger.info(
-        "Validation: %d checked, %d warnings, %d errors",
-        report.total_checked, report.warnings, report.errors,
-    )
+    if not skip_final_export:
+        logger.info("Running validation...")
+        report = validate_translations(completed_pairs, config.quality)
+        save_validation_report(report, output_dir)
+        logger.info(
+            "Validation: %d checked, %d warnings, %d errors",
+            report.total_checked, report.warnings, report.errors,
+        )
 
-    logger.info("Rendering bilingual HTML...")
-    rendered = render_bilingual_documents(
-        spine_docs, all_segments, all_translations, output_config=config.output
-    )
+        logger.info("Rendering bilingual HTML...")
+        rendered = render_bilingual_documents(
+            spine_docs, all_segments, all_translations, output_config=config.output
+        )
 
-    epub_out = output_dir / "translated.epub"
-    write_bilingual_epub(book, rendered, epub_out)
-    logger.info("Exported bilingual EPUB: %s", epub_out)
+        epub_out = output_dir / "translated.epub"
+        write_bilingual_epub(book, rendered, epub_out)
+        logger.info("Exported bilingual EPUB: %s", epub_out)
 
-    bilingual_html = build_bilingual_html(spine_docs, rendered, output_config=config.output)
-    html_out = output_dir / "bilingual.html"
-    html_out.write_text(bilingual_html, encoding="utf-8")
-    logger.info("Exported bilingual HTML: %s", html_out)
+        bilingual_html = build_bilingual_html(spine_docs, rendered, output_config=config.output)
+        html_out = output_dir / "bilingual.html"
+        html_out.write_text(bilingual_html, encoding="utf-8")
+        logger.info("Exported bilingual HTML: %s", html_out)
 
     completed_final = checkpoint.load_completed_ids()
     # A segment with a failed record that was later completed is no longer failed.

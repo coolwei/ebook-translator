@@ -38,3 +38,4 @@ env/
 
 # Agent workspace
 .sisyphus/
+mcps/
