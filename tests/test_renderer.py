@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from ebook_translator.epub.reader import SpineDocument
 from ebook_translator.models import Segment, TranslationRecord
@@ -212,3 +212,241 @@ def test_render_partial_leaves_untranslated_source_only():
     assert len(soup.find_all("div", class_="bilingual-block")) == 1
     # Untranslated paragraphs remain present (not dropped/corrupted)
     assert "Second paragraph." in soup.get_text()
+
+
+# ---------------------------------------------------------------------------
+# OutputConfig / note mode tests
+# ---------------------------------------------------------------------------
+
+def _make_output_config(style="simple", **kwargs):
+    from ebook_translator.config import OutputConfig
+    return OutputConfig(bilingual_style=style, **kwargs)
+
+
+def _make_seg_and_record(seg_id="0000:0000:aabb", source="Original.", translation="譯文。"):
+    seg = make_segment(seg_id, source)
+    record = make_record(seg_id, translation)
+    return seg, record, {seg_id: record}
+
+
+# --- note mode structure ---
+
+def test_note_mode_produces_note_block_class():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    block = soup.find("div", class_="note-block")
+    assert block is not None, "note mode must add 'note-block' class"
+
+
+def test_note_mode_has_source_block_and_translation_block():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find(class_="source-block") is not None
+    assert soup.find(class_="translation-block") is not None
+
+
+def test_note_mode_labels_when_add_translation_label_true():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note", add_translation_label=True)
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    labels = soup.find_all(class_="block-label")
+    assert len(labels) >= 1
+    texts = [lbl.get_text(strip=True) for lbl in labels]
+    assert "譯文" in texts
+
+
+def test_note_mode_no_labels_when_add_translation_label_false():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note", add_translation_label=False)
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find(class_="block-label") is None
+
+
+def test_note_mode_source_hidden_when_show_source_false():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note", show_source=False)
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find(class_="source-block") is None
+    assert soup.find(class_="translation-block") is not None
+
+
+def test_note_mode_data_segment_id_preserved():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    block = soup.find("div", attrs={"data-segment-id": seg.segment_id})
+    assert block is not None, "data-segment-id must be present in note mode"
+
+
+def test_note_mode_source_above_translation():
+    """source-block must precede translation-block in DOM order."""
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    block = soup.find("div", class_="note-block")
+    children = [c for c in block.children if isinstance(c, Tag)]
+    classes = [c.get("class", []) for c in children]
+    flat = [cls for group in classes for cls in group]
+    src_pos = flat.index("source-block")
+    trg_pos = flat.index("translation-block")
+    assert src_pos < trg_pos, "source-block must come before translation-block"
+
+
+# --- compact mode structure ---
+
+def test_compact_mode_produces_compact_block_class():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("compact")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find("div", class_="compact-block") is not None
+
+
+def test_compact_mode_has_source_and_translation_blocks():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("compact")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find(class_="source-block") is not None
+    assert soup.find(class_="translation-block") is not None
+
+
+# --- simple mode unchanged ---
+
+def test_simple_mode_still_uses_src_trg_classes():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("simple")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find(class_="src") is not None
+    assert soup.find(class_="trg") is not None
+    assert soup.find("div", class_="bilingual-block") is not None
+
+
+def test_simple_mode_backward_compat_no_output_config():
+    """Omitting output_config must behave identically to simple mode."""
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    rendered_none = render_bilingual_documents([doc], [seg], translations)
+    rendered_simple = render_bilingual_documents(
+        [doc], [seg], translations, output_config=_make_output_config("simple")
+    )
+    soup_none = BeautifulSoup(rendered_none["chap01.xhtml"], "lxml")
+    soup_simple = BeautifulSoup(rendered_simple["chap01.xhtml"], "lxml")
+    assert soup_none.find(class_="src") is not None
+    assert soup_simple.find(class_="src") is not None
+
+
+# --- CSS injection per style ---
+
+def test_note_mode_css_injected():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    style = soup.find("style")
+    assert style is not None
+    assert "note-block" in style.get_text()
+    assert "translation-block" in style.get_text()
+
+
+def test_compact_mode_css_injected():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("compact")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    style = soup.find("style")
+    assert style is not None
+    assert "compact-block" in style.get_text()
+
+
+def test_build_bilingual_html_note_css():
+    from ebook_translator.renderer import build_bilingual_html
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, translations = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    html = build_bilingual_html([doc], rendered, output_config=cfg)
+    assert "note-block" in html
+    assert "translation-block" in html
+
+
+# --- inline tag preservation in note mode ---
+
+def test_note_mode_inline_tags_preserved():
+    from ebook_translator.segmenter.segmenter import segment_document
+
+    html = (
+        "<html><head></head><body>"
+        "<p>Text with <em>emphasis</em> and <strong>bold</strong>.</p>"
+        "</body></html>"
+    )
+    doc = make_doc(html)
+    segs = segment_document(doc)
+    assert len(segs) == 1
+    seg = segs[0]
+    translations = {
+        seg.segment_id: TranslationRecord(
+            segment_id=seg.segment_id,
+            source_hash=seg.sha1_prefix,
+            status="completed",
+            source=seg.source_html,
+            translation="帶有<em>強調</em>和<strong>粗體</strong>的文字。",
+            model="mock",
+            attempt=1,
+            created_at=datetime.now(timezone.utc),
+        )
+    }
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], segs, translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    # em and strong in both source and translation sides
+    assert soup.find("em") is not None
+    assert soup.find("strong") is not None
+
+
+# --- failed translation fallback in note mode ---
+
+def test_note_mode_failed_translation_leaves_source_only():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, _ = _make_seg_and_record()
+    record = make_record(seg.segment_id, "", status="failed")
+    translations = {seg.segment_id: record}
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], translations, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    # No bilingual block — original <p> stays
+    assert soup.find("div", class_="note-block") is None
+    assert soup.find("p") is not None
+
+
+def test_note_mode_missing_translation_leaves_source_only():
+    doc = make_doc(SAMPLE_HTML)
+    seg, _, _ = _make_seg_and_record()
+    cfg = _make_output_config("note")
+    rendered = render_bilingual_documents([doc], [seg], {}, output_config=cfg)
+    soup = BeautifulSoup(rendered["chap01.xhtml"], "lxml")
+    assert soup.find("div", class_="note-block") is None
+    assert soup.find("p") is not None
+

@@ -399,13 +399,15 @@ async def run_translation(
     )
 
     logger.info("Rendering bilingual HTML...")
-    rendered = render_bilingual_documents(spine_docs, all_segments, all_translations)
+    rendered = render_bilingual_documents(
+        spine_docs, all_segments, all_translations, output_config=config.output
+    )
 
     epub_out = output_dir / "translated.epub"
     write_bilingual_epub(book, rendered, epub_out)
     logger.info("Exported bilingual EPUB: %s", epub_out)
 
-    bilingual_html = build_bilingual_html(spine_docs, rendered)
+    bilingual_html = build_bilingual_html(spine_docs, rendered, output_config=config.output)
     html_out = output_dir / "bilingual.html"
     html_out.write_text(bilingual_html, encoding="utf-8")
     logger.info("Exported bilingual HTML: %s", html_out)
@@ -475,13 +477,15 @@ def run_export(output_dir: Path, config: AppConfig) -> None:
     segments = checkpoint.load_segments()
     translations = checkpoint.load_all_translations()
 
-    rendered = render_bilingual_documents(spine_docs, segments, translations)
+    rendered = render_bilingual_documents(
+        spine_docs, segments, translations, output_config=config.output
+    )
 
     epub_out = output_dir / "translated.epub"
     write_bilingual_epub(book, rendered, epub_out)
     print(f"{t('exported', lang)}: {epub_out}")
 
-    bilingual_html = build_bilingual_html(spine_docs, rendered)
+    bilingual_html = build_bilingual_html(spine_docs, rendered, output_config=config.output)
     html_out = output_dir / "bilingual.html"
     html_out.write_text(bilingual_html, encoding="utf-8")
     print(f"{t('exported', lang)}: {html_out}")

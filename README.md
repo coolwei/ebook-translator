@@ -293,6 +293,41 @@ ebook-translator export outputs/<書名> --config config.yaml
 ebook-translator export outputs/<書名> --config config.yaml
 ```
 
+### 閱讀樣式
+
+透過 `output.bilingual_style` 設定雙語輸出版面，在 `config.yaml` 加入：
+
+```yaml
+output:
+  bilingual_style: note        # simple｜note｜compact
+  show_source: true            # 是否顯示原文
+  source_opacity: 0.55         # 原文透明度（note/compact 模式）
+  add_translation_label: true  # 是否顯示「原文／譯文」標籤
+```
+
+**三種樣式比較**：
+
+| 樣式 | 特性 | 適合場景 |
+|---|---|---|
+| `simple` | 原始 `.src`/`.trg` 並列，最輕量（預設） | 程式相容性優先、舊版行為 |
+| `note` | 譯文為主，原文淡化；寬行高、左側 border | 中文閱讀、電子墨水閱讀器 |
+| `compact` | 緊湊間距，較小字體 | 長書、節省空間 |
+
+**note 模式 HTML 結構**：
+
+```html
+<div class="bilingual-block note-block" data-segment-id="0001:0002:a3b4c5d6">
+  <div class="source-block">
+    <div class="block-label source-label">原文</div>
+    <p class="src">The quick brown fox jumps over the lazy dog.</p>
+  </div>
+  <div class="translation-block">
+    <div class="block-label translation-label">譯文</div>
+    <p class="trg">那隻敏捷的棕色狐狸跳過了那條懶惰的狗。</p>
+  </div>
+</div>
+```
+
 ## 輸出結構
 
 ```

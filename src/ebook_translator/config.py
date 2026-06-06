@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Literal
 
+BilingualStyle = Literal["simple", "note", "compact"]
+
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
@@ -92,6 +94,16 @@ class CliConfig(BaseModel):
     use_unicode_symbols: bool = True
 
 
+class OutputConfig(BaseModel):
+    """Bilingual output rendering style."""
+    bilingual_style: BilingualStyle = "simple"
+    show_source: bool = True
+    source_collapsible: bool = False
+    source_opacity: float = 0.55
+    add_segment_id: bool = False
+    add_translation_label: bool = True
+
+
 class AppConfig(BaseModel):
     project: ProjectConfig = ProjectConfig()
     input: InputConfig
@@ -103,6 +115,7 @@ class AppConfig(BaseModel):
     quality: QualityConfig = QualityConfig()
     context: ContextConfig = ContextConfig()
     cli: CliConfig = CliConfig()
+    output: OutputConfig = OutputConfig()
 
 
 def load_config(path: Path) -> AppConfig:
