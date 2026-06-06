@@ -41,6 +41,37 @@ ebook-translator start --yes
 
 `ebook-translator start` reads `config.yaml` and `books/*.epub` by default. For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. It stops any book whose segment count exceeds `--max-segments` (default `300`) unless you raise the limit.
 
+### Large-book safe mode
+
+For long books or providers that frequently return 429 / empty content / `quality_failed`, use batched translation with cooldown and an optional rate-limit circuit breaker:
+
+```powershell
+python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
+```
+
+| 參數 | 說明 |
+|---|---|
+| `--max-segments N` | 本次處理範圍上限，避免超大書誤跑 |
+| `--limit N` | 本次實際最多翻譯 N 段，適合測試 |
+| `--batch-size N` | 每批最多處理 N 個未完成 segment |
+| `--cooldown-seconds N` | 每批完成後等待 N 秒（`--dry-run` 不會 sleep） |
+| `--stop-on-rate-limit-count N` | 累積 N 次 rate limit 類錯誤後安全停止（0 = 關閉） |
+
+行為摘要：
+
+- 適合大書，以及 provider 容易 429 / empty content / `quality_failed` 的情況。
+- `batch-size` 越小越穩，但總時間更長。
+- `cooldown-seconds` 可降低 provider 長時間連續請求壓力。
+- `stop-on-rate-limit-count` 可避免硬跑浪費額度；達門檻後仍會保留 checkpoint，並匯出目前進度的 HTML / EPUB。
+- 每批完成後自動執行 `validate`、`report-missing`、`export`；若該批出現 rate limit，會略過立即 retry，待之後再 `start` 或 `resume`。
+- `--dry-run` 搭配 safe mode 時只顯示批次計畫，不翻譯、不 retry、不 export、不 sleep。
+
+預覽批次計畫：
+
+```powershell
+python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --dry-run
+```
+
 ## CLI 語言設定
 
 CLI 輸出支援繁體中文（zh-TW）和英文（en）模式。預設為繁體中文。

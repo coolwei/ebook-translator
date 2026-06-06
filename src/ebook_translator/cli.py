@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -67,6 +68,153 @@ def _quality_failed_ids(job_dir: Path, cfg) -> set[str]:
         if seg.segment_id in translations
     ]
     return quality_failed_segment_ids(pairs, cfg.quality)
+
+
+def _print_safe_mode_plan(
+    *,
+    lang: str,
+    segment_count: int,
+    effective_segments: int | None,
+    batch_size: int,
+    cooldown_seconds: int,
+    stop_on_rate_limit_count: int,
+) -> None:
+    from .i18n import t
+    from .safe_mode import estimate_batch_count
+
+    typer.echo(t("safe_mode_plan_title", lang))
+    typer.echo(f"  {t('safe_mode_total_segments', lang)}: {segment_count}")
+    if effective_segments is None:
+        typer.echo(f"  {t('safe_mode_effective_segments', lang)}: 0 (skipped)")
+    else:
+        typer.echo(f"  {t('safe_mode_effective_segments', lang)}: {effective_segments}")
+        typer.echo(
+            f"  {t('safe_mode_estimated_batches', lang)}: "
+            f"{estimate_batch_count(effective_segments, batch_size)}"
+        )
+    typer.echo(f"  {t('safe_mode_batch_size', lang)}: {batch_size}")
+    typer.echo(f"  {t('safe_mode_cooldown_seconds', lang)}: {cooldown_seconds}")
+    threshold = stop_on_rate_limit_count if stop_on_rate_limit_count > 0 else "disabled"
+    typer.echo(f"  {t('safe_mode_stop_on_rate_limit', lang)}: {threshold}")
+
+
+def _run_post_batch_exports_only(job_dir: Path, cfg) -> None:
+    from .translator import run_export, run_report_missing, run_validate
+
+    run_validate(job_dir, cfg)
+    run_report_missing(job_dir, cfg.input.path, cfg)
+    run_export(job_dir, cfg)
+
+
+def _run_post_batch_workflow(
+    job_dir: Path,
+    cfg,
+    lang: str,
+    *,
+    limit: int | None,
+) -> None:
+    """Retry failures, validate, report-missing, export after one batch."""
+    from .checkpoint import CheckpointManager
+    from .i18n import t
+    from .translator import run_export, run_report_missing, run_translation, run_validate
+
+    checkpoint = CheckpointManager(job_dir)
+
+    failed_ids = checkpoint.load_failed_ids()
+    if failed_ids:
+        typer.echo(f"{t('retrying_failed', lang)}: {len(failed_ids)}")
+        asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
+
+    qf_ids = _quality_failed_ids(job_dir, cfg)
+    if qf_ids:
+        typer.echo(f"{t('retrying_quality_failed', lang)}: {len(qf_ids)}")
+        asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
+
+    run_validate(job_dir, cfg)
+    run_report_missing(job_dir, cfg.input.path, cfg)
+    run_export(job_dir, cfg)
+
+
+def _run_safe_mode_translation(
+    cfg,
+    job_dir: Path,
+    lang: str,
+    *,
+    segment_count: int,
+    batch_size: int,
+    cooldown_seconds: int,
+    stop_on_rate_limit_count: int,
+    limit: int | None,
+) -> None:
+    from .i18n import t
+    from .safe_mode import (
+        batch_limit_for_run,
+        count_rate_limit_errors_since,
+        pending_segment_count,
+        translation_record_line_count,
+    )
+    from .translator import run_translation
+
+    remaining_limit = limit
+    session_rate_limit_count = 0
+    batch_num = 0
+
+    while True:
+        pending = pending_segment_count(job_dir, cfg, segment_count)
+        if pending <= 0:
+            break
+
+        batch_limit = batch_limit_for_run(batch_size, remaining_limit)
+        if batch_limit is None or batch_limit <= 0:
+            break
+
+        batch_num += 1
+        typer.echo(t("safe_mode_batch_start", lang, batch=batch_num, limit=batch_limit))
+
+        from .checkpoint import CheckpointManager
+
+        checkpoint = CheckpointManager(job_dir)
+        completed_before = len(checkpoint.load_completed_ids())
+        lines_before = translation_record_line_count(job_dir)
+        asyncio.run(run_translation(cfg, limit=batch_limit))
+        batch_rate_limits = count_rate_limit_errors_since(job_dir, lines_before)
+        session_rate_limit_count += batch_rate_limits
+        completed_after = len(checkpoint.load_completed_ids())
+
+        rate_limit_stop = (
+            stop_on_rate_limit_count > 0
+            and session_rate_limit_count >= stop_on_rate_limit_count
+        )
+        if rate_limit_stop or batch_rate_limits > 0:
+            _run_post_batch_exports_only(job_dir, cfg)
+        else:
+            _run_post_batch_workflow(job_dir, cfg, lang, limit=limit)
+        typer.echo(t("safe_mode_batch_done", lang, batch=batch_num))
+
+        if remaining_limit is not None:
+            remaining_limit = max(0, remaining_limit - (completed_after - completed_before))
+
+        if rate_limit_stop:
+            typer.echo(
+                t(
+                    "safe_mode_stopped_rate_limit",
+                    lang,
+                    count=session_rate_limit_count,
+                    threshold=stop_on_rate_limit_count,
+                ),
+                err=True,
+            )
+            break
+
+        pending = pending_segment_count(job_dir, cfg, segment_count)
+        if pending <= 0:
+            break
+        if batch_limit_for_run(batch_size, remaining_limit) is None:
+            break
+
+        if cooldown_seconds > 0:
+            typer.echo(t("safe_mode_cooldown", lang, seconds=cooldown_seconds))
+            time.sleep(cooldown_seconds)
 
 
 @app.command()
@@ -161,12 +309,28 @@ def start(
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation and start translating"),
     max_segments: int = typer.Option(300, "--max-segments", help="Stop a book if segment count exceeds this"),
     skip_confirm: bool = typer.Option(False, "--skip-confirm", help="Alias for --yes"),
+    batch_size: int | None = typer.Option(
+        None,
+        "--batch-size",
+        help="Process at most N pending segments per batch (large-book safe mode)",
+    ),
+    cooldown_seconds: int = typer.Option(
+        0,
+        "--cooldown-seconds",
+        help="Wait N seconds between batches (0 = no wait)",
+    ),
+    stop_on_rate_limit_count: int = typer.Option(
+        0,
+        "--stop-on-rate-limit-count",
+        help="Stop after N rate-limit errors in this run (0 = disabled)",
+    ),
 ) -> None:
     """Run the full translation workflow for EPUBs in books/."""
     load_dotenv(encoding="utf-8-sig")
     from .checkpoint import CheckpointManager
     from .estimate import run_estimate
     from .i18n import t, get_cli_language
+    from .safe_mode import compute_effective_segments
     from .translator import (
         run_export,
         run_inspect,
@@ -210,7 +374,19 @@ def start(
             )
             continue
 
+        effective_segments = compute_effective_segments(segment_count, max_segments, limit)
+        safe_mode = batch_size is not None and batch_size > 0
+
         if dry_run:
+            if safe_mode:
+                _print_safe_mode_plan(
+                    lang=lang,
+                    segment_count=segment_count,
+                    effective_segments=effective_segments,
+                    batch_size=batch_size,
+                    cooldown_seconds=cooldown_seconds,
+                    stop_on_rate_limit_count=stop_on_rate_limit_count,
+                )
             typer.echo(t("dry_run_complete", lang))
             continue
 
@@ -228,22 +404,34 @@ def start(
                 typer.echo(f"{t('skipped', lang)} {epub_path}")
                 continue
 
-        asyncio.run(run_translation(cfg, limit=limit))
+        if safe_mode:
+            _run_safe_mode_translation(
+                cfg,
+                job_dir,
+                lang,
+                segment_count=segment_count,
+                batch_size=batch_size,
+                cooldown_seconds=cooldown_seconds,
+                stop_on_rate_limit_count=stop_on_rate_limit_count,
+                limit=limit,
+            )
+        else:
+            asyncio.run(run_translation(cfg, limit=limit))
 
-        checkpoint = CheckpointManager(job_dir)
-        failed_ids = checkpoint.load_failed_ids()
-        if failed_ids:
-            typer.echo(f"{t('retrying_failed', lang)}: {len(failed_ids)}")
-            asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
+            checkpoint = CheckpointManager(job_dir)
+            failed_ids = checkpoint.load_failed_ids()
+            if failed_ids:
+                typer.echo(f"{t('retrying_failed', lang)}: {len(failed_ids)}")
+                asyncio.run(run_translation(cfg, limit=limit, failed_only=True))
 
-        qf_ids = _quality_failed_ids(job_dir, cfg)
-        if qf_ids:
-            typer.echo(f"{t('retrying_quality_failed', lang)}: {len(qf_ids)}")
-            asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
+            qf_ids = _quality_failed_ids(job_dir, cfg)
+            if qf_ids:
+                typer.echo(f"{t('retrying_quality_failed', lang)}: {len(qf_ids)}")
+                asyncio.run(run_translation(cfg, limit=limit, quality_failed_only=True))
 
-        run_validate(job_dir)
-        run_report_missing(job_dir, cfg.input.path, cfg)
-        run_export(job_dir, cfg)
+            run_validate(job_dir, cfg)
+            run_report_missing(job_dir, cfg.input.path, cfg)
+            run_export(job_dir, cfg)
 
 
 @app.command()
