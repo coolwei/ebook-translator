@@ -337,7 +337,7 @@ def test_detect_explanation_prefix_passes_clean():
 
 def test_phase2_bad_translation_flags_prefix_and_simplified():
     """The exact Phase 2 bad output should now be caught."""
-    cfg = QualityConfig()
+    cfg = QualityConfig(strict_mode=True)
     seg = make_segment(source_html="It was a <em>bright</em> cold day.")
     rec = make_record("【第一章：开端】那是一個<em>明亮</em>的寒冷四月天。")
     report = validate_translations([(seg, rec)], cfg)
@@ -373,21 +373,21 @@ def test_classify_failure_categories():
 
 
 def test_quality_failed_segment_ids_detects_quality_issues():
-    cfg = QualityConfig()
+    cfg = QualityConfig(strict_mode=True)
     seg = make_segment()
     bad = make_record("【第一章：开端】这是简体譯文")  # added_prefix + simplified
     assert quality_failed_segment_ids([(seg, bad)], cfg) == {seg.segment_id}
 
 
 def test_quality_failed_segment_ids_ignores_clean():
-    cfg = QualityConfig()
+    cfg = QualityConfig(strict_mode=True)
     seg = make_segment()
     clean = make_record("這是乾淨的繁體譯文。")
     assert quality_failed_segment_ids([(seg, clean)], cfg) == set()
 
 
 def test_quality_failed_latest_clean_record_supersedes():
-    cfg = QualityConfig()
+    cfg = QualityConfig(strict_mode=True)
     seg = make_segment()
     bad = make_record("【第一章：开端】这是简体譯文")
     clean = make_record("這是乾淨的繁體譯文。")
@@ -396,7 +396,7 @@ def test_quality_failed_latest_clean_record_supersedes():
 
 
 def test_quality_failed_does_not_include_hard_failed():
-    cfg = QualityConfig()
+    cfg = QualityConfig(strict_mode=True)
     seg = make_segment()
     failed = make_record("", status="failed")  # hard failure, not a quality issue
     assert quality_failed_segment_ids([(seg, failed)], cfg) == set()
@@ -444,7 +444,7 @@ def test_detect_untranslated_text_partial_english_below_threshold():
 
 def test_quality_gate_completed_english_echo_marked_quality_failed():
     """quality_failed_segment_ids must catch a completed-but-untranslated segment."""
-    cfg = QualityConfig()
+    cfg = QualityConfig(strict_mode=True)
     seg = make_segment("The quick brown fox jumps over the lazy dog.")
     rec = make_record("The quick brown fox jumps over the lazy dog.", status="completed")
     # Should be flagged as quality_failed (untranslated_text check)

@@ -13,6 +13,11 @@ translation:
   preserve_html_tags: true
   preserve_footnotes: true
   skip_existing: true
+  # segment = 一段一 request（預設）；segment_batch = 多段合併翻譯
+  mode: segment
+  segments_per_request: 1
+  max_chars_per_request: 6000
+  preserve_segment_order: true
 
 provider:
   type: openai_compatible
@@ -56,6 +61,20 @@ quality:
   validate_added_prefix: true
   validate_markdown_fence: true
   validate_explanation_prefix: true
+  # 寬鬆模式（預設）：少量簡體字等只記 warning，不阻擋完成
+  strict_mode: false
+  hard_fail:
+    - empty_content
+    - markdown_fence
+    - explanation_prefix
+    - untranslated_text
+  warning_only:
+    - simplified_chinese
+    - added_prefix
+  simplified_chinese:
+    max_error_chars: 3
+    max_error_ratio: 0.01
+    treat_as_warning_below_threshold: true
 
 cli:
   language: zh-TW

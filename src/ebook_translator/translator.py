@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .batch_parser import parse_batch_response
+from .batch_planner import TranslationBatch, plan_translation_batches
 from .checkpoint import CheckpointManager
 from .config import AppConfig
 from .epub.reader import SpineDocument, read_epub
@@ -15,16 +17,26 @@ from .fallback import ModelFallbackState, should_fallback_from_exception, should
 from .i18n import get_cli_language, t
 from .logging_setup import get_logger, setup_logging
 from .models import JobState, Segment, TranslationRecord
-from .prompt import build_system_prompt, build_user_message
-from .providers.base import AuthError, ContextLengthError, TranslationProvider
+from .prompt import (
+    build_batch_system_prompt,
+    build_batch_user_message,
+    build_system_prompt,
+    build_user_message,
+)
+from .providers.base import (
+    AuthError,
+    ContextLengthError,
+    ProviderError,
+    TranslationProvider,
+)
 from .providers.openai_compatible import OpenAICompatibleProvider
 from .renderer import build_bilingual_html, render_bilingual_documents
 from .scheduler import TranslationScheduler
 from .segmenter.segmenter import segment_all_documents
 from .translation_log import TranslationLogWriter
 from .validator import (
-    check_quality,
     classify_failure,
+    evaluate_quality_gate,
     quality_failed_segment_ids,
     save_validation_report,
     validate_translations,
@@ -64,6 +76,21 @@ def _get_book_name(book: object, input_path: Path) -> str:
 
 def _print_fallback_notice(from_model: str, to_model: str, reason: str, lang: str) -> None:
     print(t("model_fallback", lang, from_model=from_model, to_model=to_model, reason=reason))
+
+
+def _should_use_batch_mode(
+    config: AppConfig,
+    *,
+    failed_only: bool,
+    quality_failed_only: bool,
+    force: bool,
+    force_segments: set[str] | None,
+) -> bool:
+    if config.translation.mode != "segment_batch":
+        return False
+    if failed_only or quality_failed_only or force or force_segments:
+        return False
+    return True
 
 
 async def _do_translate(
@@ -113,6 +140,8 @@ async def _do_translate(
         fallback_from: str | None = None,
         fallback_attempt: int | None = None,
         quality_matches: list | None = None,
+        quality_warnings: list[str] | None = None,
+        quality_errors: list[str] | None = None,
     ) -> TranslationRecord:
         return TranslationRecord(
             segment_id=seg.segment_id,
@@ -126,6 +155,8 @@ async def _do_translate(
             fallback_from=fallback_from,
             fallback_attempt=fallback_attempt,
             quality_matches=quality_matches,
+            quality_warnings=quality_warnings,
+            quality_errors=quality_errors,
             created_at=datetime.now(timezone.utc),
         )
 
@@ -183,10 +214,13 @@ async def _do_translate(
             else:
                 response = await scheduler.translate(request)
 
-            issues = check_quality(seg, response.translated_text, config.quality)
-            if issues:
-                checks = "; ".join(i.check for i in issues)
-                q_matches = [m for issue in issues for m in issue.matches] or None
+            gate = evaluate_quality_gate(seg, response.translated_text, config.quality)
+            q_matches = (
+                [m for issue in (gate.errors + gate.warnings) for m in issue.matches]
+                or None
+            )
+            if gate.has_errors:
+                checks = "; ".join(i.check for i in gate.errors)
                 last_status = "quality_failed"
                 last_model = response.model
                 last_error = checks
@@ -201,7 +235,9 @@ async def _do_translate(
                     duration_ms=duration_ms,
                     level="WARNING",
                 )
-                if use_fallback and should_fallback_from_quality(checks):
+                if use_fallback and should_fallback_from_quality(
+                    checks, strict_mode=config.quality.strict_mode
+                ):
                     next_model = (
                         models_to_try[model_index + 1]
                         if model_index + 1 < len(models_to_try)
@@ -226,11 +262,18 @@ async def _do_translate(
                     checks,
                     response.translated_text,
                     quality_matches=q_matches,
+                    quality_errors=[i.check for i in gate.errors],
+                    quality_warnings=[i.check for i in gate.warnings] or None,
                 )
 
             duration_ms = int((time.monotonic() - started) * 1000)
             if use_fallback:
                 await fallback_state.set_current(response.model)
+            warn_checks = [i.check for i in gate.warnings]
+            if warn_checks:
+                logger.warning(
+                    "Quality warnings %s: %s", seg.segment_id, "; ".join(warn_checks)
+                )
             _log_attempt(
                 model=response.model,
                 status="completed",
@@ -244,6 +287,8 @@ async def _do_translate(
                 translation=response.translated_text,
                 fallback_from=previous_model,
                 fallback_attempt=model_index if model_index > 0 else None,
+                quality_matches=q_matches,
+                quality_warnings=warn_checks or None,
             )
         except (AuthError, ContextLengthError) as exc:
             duration_ms = int((time.monotonic() - started) * 1000)
@@ -301,6 +346,369 @@ async def _do_translate(
         fallback_attempt=len(models_to_try) - 1 if len(models_to_try) > 1 else None,
         quality_matches=last_quality_matches,
     )
+
+
+def _record_from_gate(
+    seg: Segment,
+    *,
+    attempt: int,
+    model: str,
+    translation: str,
+    gate,
+    fallback_from: str | None = None,
+    fallback_attempt: int | None = None,
+    error: str = "",
+) -> TranslationRecord:
+    q_matches = (
+        [m for issue in (gate.errors + gate.warnings) for m in issue.matches]
+        or None
+    )
+    if gate.has_errors:
+        checks = "; ".join(i.check for i in gate.errors)
+        return TranslationRecord(
+            segment_id=seg.segment_id,
+            source_hash=seg.sha1_prefix,
+            status="quality_failed",
+            source=seg.source_html,
+            translation=translation,
+            model=model,
+            attempt=attempt,
+            error=error or checks,
+            fallback_from=fallback_from,
+            fallback_attempt=fallback_attempt,
+            quality_matches=q_matches,
+            quality_errors=[i.check for i in gate.errors],
+            quality_warnings=[i.check for i in gate.warnings] or None,
+            created_at=datetime.now(timezone.utc),
+        )
+    warn_checks = [i.check for i in gate.warnings]
+    return TranslationRecord(
+        segment_id=seg.segment_id,
+        source_hash=seg.sha1_prefix,
+        status="completed",
+        source=seg.source_html,
+        translation=translation,
+        model=model,
+        attempt=attempt,
+        fallback_from=fallback_from,
+        fallback_attempt=fallback_attempt,
+        quality_matches=q_matches,
+        quality_warnings=warn_checks or None,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+async def _do_translate_batch(
+    batch: TranslationBatch,
+    attempt_map: dict[str, int],
+    scheduler: TranslationScheduler,
+    config: AppConfig,
+    *,
+    fallback_state: ModelFallbackState | None = None,
+    translation_log: TranslationLogWriter | None = None,
+) -> list[TranslationRecord]:
+    """Translate multiple segments in one provider request."""
+    from .providers.base import TranslationRequest
+
+    logger = get_logger()
+    lang = get_cli_language(config)
+    segments = batch.segments
+    if not segments:
+        return []
+
+    system_prompt = build_batch_system_prompt()
+    user_message = build_batch_user_message(segments)
+    expected_ids = {seg.segment_id for seg in segments}
+    batch_size = len(segments)
+
+    use_fallback = fallback_state is not None and fallback_state.enabled
+    models_to_try = fallback_state.models_to_try() if use_fallback else [config.provider.model]
+
+    def _log_seg(
+        seg: Segment,
+        *,
+        model: str,
+        status: str,
+        attempt: int,
+        error_type: str = "",
+        error_message: str = "",
+        fallback_from: str = "",
+        fallback_to: str = "",
+        duration_ms: int | None = None,
+        batch_parse_error: str = "",
+        missing_from_batch_response: str = "",
+        level: str = "INFO",
+    ) -> None:
+        if translation_log is None:
+            return
+        translation_log.log(
+            segment_id=seg.segment_id,
+            batch_index=batch.batch_index,
+            request_batch_size=batch_size,
+            batch_parse_error=batch_parse_error,
+            missing_from_batch_response=missing_from_batch_response,
+            model=model,
+            status=status,
+            error_type=error_type,
+            error_message=error_message,
+            fallback_from=fallback_from,
+            fallback_to=fallback_to,
+            attempt=attempt,
+            duration_ms=duration_ms,
+            level=level,
+        )
+
+    last_error = ""
+    for model_index, model in enumerate(models_to_try):
+        previous_model = models_to_try[model_index - 1] if model_index > 0 else None
+        request = TranslationRequest(
+            segment=segments[0],
+            system_prompt=system_prompt,
+            user_message=user_message,
+            model=model,
+            max_tokens=config.limits.max_output_tokens,
+        )
+        started = time.monotonic()
+        try:
+            if use_fallback:
+                response = await scheduler.translate_once(request)
+            else:
+                response = await scheduler.translate(request)
+
+            parsed = parse_batch_response(response.translated_text, expected_ids)
+            duration_ms = int((time.monotonic() - started) * 1000)
+
+            if parsed.parse_error or parsed.missing_ids:
+                reason = parsed.parse_error or "missing segment translations"
+                last_error = reason
+                for seg in segments:
+                    attempt = attempt_map.get(seg.segment_id, 1)
+                    _log_seg(
+                        seg,
+                        model=response.model,
+                        status="failed",
+                        attempt=attempt,
+                        error_type="batch_parse_error",
+                        error_message=reason,
+                        batch_parse_error=parsed.parse_error or "",
+                        missing_from_batch_response=",".join(parsed.missing_ids),
+                        duration_ms=duration_ms,
+                        level="WARNING",
+                    )
+                if use_fallback and should_fallback_from_exception(ProviderError(reason)):
+                    next_model = (
+                        models_to_try[model_index + 1]
+                        if model_index + 1 < len(models_to_try)
+                        else None
+                    )
+                    if next_model:
+                        _print_fallback_notice(response.model, next_model, reason, lang)
+                        continue
+                return [
+                    TranslationRecord(
+                        segment_id=seg.segment_id,
+                        source_hash=seg.sha1_prefix,
+                        status="failed",
+                        source=seg.source_html,
+                        translation=parsed.translations.get(seg.segment_id, ""),
+                        model=response.model,
+                        attempt=attempt_map.get(seg.segment_id, 1),
+                        error=reason,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                    for seg in segments
+                ]
+
+            records: list[TranslationRecord] = []
+            for seg in segments:
+                attempt = attempt_map.get(seg.segment_id, 1)
+                translation = parsed.translations[seg.segment_id]
+                gate = evaluate_quality_gate(seg, translation, config.quality)
+                record = _record_from_gate(
+                    seg,
+                    attempt=attempt,
+                    model=response.model,
+                    translation=translation,
+                    gate=gate,
+                    fallback_from=previous_model,
+                    fallback_attempt=model_index if model_index > 0 else None,
+                )
+                records.append(record)
+                _log_seg(
+                    seg,
+                    model=response.model,
+                    status=record.status,
+                    attempt=attempt,
+                    error_type="quality_failed" if record.status == "quality_failed" else "",
+                    error_message=record.error or "",
+                    fallback_from=previous_model or "",
+                    duration_ms=duration_ms,
+                    level="WARNING" if record.status == "quality_failed" else "INFO",
+                )
+
+            if use_fallback:
+                await fallback_state.set_current(response.model)
+            return records
+
+        except (AuthError, ContextLengthError) as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            for seg in segments:
+                attempt = attempt_map.get(seg.segment_id, 1)
+                _log_seg(
+                    seg,
+                    model=model,
+                    status="failed",
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    duration_ms=duration_ms,
+                    level="ERROR",
+                )
+            return [
+                TranslationRecord(
+                    segment_id=seg.segment_id,
+                    source_hash=seg.sha1_prefix,
+                    status="failed",
+                    source=seg.source_html,
+                    translation="",
+                    model=model,
+                    attempt=attempt_map.get(seg.segment_id, 1),
+                    error=str(exc),
+                    created_at=datetime.now(timezone.utc),
+                )
+                for seg in segments
+            ]
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            last_error = str(exc)
+            for seg in segments:
+                attempt = attempt_map.get(seg.segment_id, 1)
+                _log_seg(
+                    seg,
+                    model=model,
+                    status="failed",
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    duration_ms=duration_ms,
+                    level="WARNING",
+                )
+            if use_fallback and should_fallback_from_exception(exc):
+                next_model = (
+                    models_to_try[model_index + 1]
+                    if model_index + 1 < len(models_to_try)
+                    else None
+                )
+                if next_model:
+                    _print_fallback_notice(model, next_model, str(exc), lang)
+                    continue
+            return [
+                TranslationRecord(
+                    segment_id=seg.segment_id,
+                    source_hash=seg.sha1_prefix,
+                    status="failed",
+                    source=seg.source_html,
+                    translation="",
+                    model=model,
+                    attempt=attempt_map.get(seg.segment_id, 1),
+                    error=str(exc),
+                    created_at=datetime.now(timezone.utc),
+                )
+                for seg in segments
+            ]
+
+    logger.warning(
+        "Batch %d failed after all models: %s", batch.batch_index, last_error
+    )
+    return [
+        TranslationRecord(
+            segment_id=seg.segment_id,
+            source_hash=seg.sha1_prefix,
+            status="failed",
+            source=seg.source_html,
+            translation="",
+            model=models_to_try[-1],
+            attempt=attempt_map.get(seg.segment_id, 1),
+            error=last_error or "batch failed",
+            created_at=datetime.now(timezone.utc),
+        )
+        for seg in segments
+    ]
+
+
+async def _translate_batch_group(
+    batch: TranslationBatch,
+    attempt_map: dict[str, int],
+    scheduler: TranslationScheduler,
+    checkpoint: CheckpointManager,
+    state: JobState,
+    config: AppConfig,
+    lock: asyncio.Lock,
+    cache: dict[str, tuple[str, str, str]],
+    in_flight: dict[str, asyncio.Event],
+    use_cache: bool,
+    recent_completed: list[tuple[Segment, TranslationRecord]],
+    *,
+    fallback_state: ModelFallbackState | None = None,
+    translation_log: TranslationLogWriter | None = None,
+) -> list[TranslationRecord]:
+    logger = get_logger()
+    cached_records: list[TranslationRecord] = []
+    api_segments: list[Segment] = []
+
+    for seg in batch.segments:
+        sh = seg.sha1_prefix
+        async with lock:
+            if use_cache and sh in cache:
+                src_id, ctext, cmodel = cache[sh]
+                record = TranslationRecord(
+                    segment_id=seg.segment_id,
+                    source_hash=sh,
+                    status="completed",
+                    source=seg.source_html,
+                    translation=ctext,
+                    model=cmodel,
+                    attempt=attempt_map.get(seg.segment_id, 1),
+                    reused_from_segment_id=src_id,
+                    created_at=datetime.now(timezone.utc),
+                )
+                cached_records.append(record)
+                logger.info("Cache hit %s (reused from %s)", seg.segment_id, src_id)
+                continue
+        api_segments.append(seg)
+
+    if api_segments:
+        api_batch = TranslationBatch(segments=api_segments, batch_index=batch.batch_index)
+        api_records = await _do_translate_batch(
+            api_batch,
+            attempt_map,
+            scheduler,
+            config,
+            fallback_state=fallback_state,
+            translation_log=translation_log,
+        )
+    else:
+        api_records = []
+
+    records = cached_records + api_records
+    for record in records:
+        checkpoint.append_translation(record)
+        seg = next(s for s in batch.segments if s.segment_id == record.segment_id)
+        async with lock:
+            if record.status == "completed":
+                state.completed_segments += 1
+                recent_completed.append((seg, record))
+                if use_cache and _is_cacheable_translation(seg, record, config):
+                    cache.setdefault(
+                        record.source_hash,
+                        (record.segment_id, record.translation, record.model),
+                    )
+            else:
+                state.failed_segments += 1
+            state.updated_at = datetime.now(timezone.utc)
+        checkpoint.save_state(state)
+
+    return records
 
 
 async def _translate_one(
@@ -551,28 +959,67 @@ async def run_translation(
                 cache.setdefault(rec.source_hash, (rec.segment_id, rec.translation, rec.model))
         logger.info("Cache seeded with %d clean translation(s)", len(cache))
 
-    tasks = [
-        _translate_one(
-            seg=seg,
-            attempt=attempt_map.get(seg.segment_id, 1),
-            scheduler=scheduler,
-            checkpoint=checkpoint,
-            state=state,
-            system_prompt=system_prompt,
-            chapter_titles=chapter_titles,
-            recent_completed=recent_completed,
-            config=config,
-            lock=lock,
-            cache=cache,
-            in_flight=in_flight,
-            use_cache=use_cache,
-            fallback_state=fallback_state,
-            translation_log=translation_log,
-            book_name=book_name,
-            batch_index=batch_index,
+    use_batch = _should_use_batch_mode(
+        config,
+        failed_only=failed_only,
+        quality_failed_only=quality_failed_only,
+        force=force,
+        force_segments=force_segments,
+    )
+
+    if use_batch:
+        batches = plan_translation_batches(
+            pending,
+            segments_per_request=config.translation.segments_per_request,
+            max_chars_per_request=config.translation.max_chars_per_request,
+            preserve_segment_order=config.translation.preserve_segment_order,
         )
-        for seg in pending
-    ]
+        logger.info(
+            "Batch mode: %d segments in %d request(s)",
+            len(pending),
+            len(batches),
+        )
+        tasks = [
+            _translate_batch_group(
+                batch=batch,
+                attempt_map=attempt_map,
+                scheduler=scheduler,
+                checkpoint=checkpoint,
+                state=state,
+                config=config,
+                lock=lock,
+                cache=cache,
+                in_flight=in_flight,
+                use_cache=use_cache,
+                recent_completed=recent_completed,
+                fallback_state=fallback_state,
+                translation_log=translation_log,
+            )
+            for batch in batches
+        ]
+    else:
+        tasks = [
+            _translate_one(
+                seg=seg,
+                attempt=attempt_map.get(seg.segment_id, 1),
+                scheduler=scheduler,
+                checkpoint=checkpoint,
+                state=state,
+                system_prompt=system_prompt,
+                chapter_titles=chapter_titles,
+                recent_completed=recent_completed,
+                config=config,
+                lock=lock,
+                cache=cache,
+                in_flight=in_flight,
+                use_cache=use_cache,
+                fallback_state=fallback_state,
+                translation_log=translation_log,
+                book_name=book_name,
+                batch_index=batch_index,
+            )
+            for seg in pending
+        ]
 
     try:
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -654,7 +1101,8 @@ def run_validate(output_dir: Path, config: AppConfig | None = None) -> None:
         if seg.segment_id in translations
     ]
 
-    report = validate_translations(pairs, QualityConfig())
+    quality_cfg = config.quality if config else QualityConfig()
+    report = validate_translations(pairs, quality_cfg)
     save_validation_report(report, output_dir)
 
     lang = get_cli_language(config) if config else "zh-TW"

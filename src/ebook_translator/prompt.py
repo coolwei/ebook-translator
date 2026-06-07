@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from .config import ContextConfig
 from .models import Segment, TranslationRecord
 
@@ -64,3 +66,35 @@ def build_user_message(
         "nothing else]\n" + segment.source_html
     )
     return "\n\n".join(parts)
+
+
+BATCH_SYSTEM_PROMPT = (
+    SYSTEM_PROMPT
+    + "\n\n"
+    + "Batch mode rules:\n"
+    + "- You will receive a JSON array of segments to translate.\n"
+    + "- Return ONLY a JSON array. Each item must include segment_id and translation.\n"
+    + "- Do not omit, merge, split, or change any segment_id.\n"
+    + "- Do not wrap the JSON in Markdown code fences.\n"
+    + "- Do not add explanations."
+)
+
+
+def build_batch_system_prompt() -> str:
+    return BATCH_SYSTEM_PROMPT
+
+
+def build_batch_user_message(segments: list[Segment]) -> str:
+    payload = [
+        {"segment_id": seg.segment_id, "source": seg.source_html}
+        for seg in segments
+    ]
+    return (
+        "請翻譯以下多個段落。\n"
+        "必須回傳 JSON array。\n"
+        "每個 item 必須包含 segment_id 與 translation。\n"
+        "不得省略、合併、拆分、改 ID。\n"
+        "不得輸出 markdown code fence。\n"
+        "不得輸出解釋。\n\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+    )

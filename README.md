@@ -177,7 +177,7 @@ report_saved_to outputs/my-book/estimate_report.json
 - `failed` 與 `quality_failed` record 不會被 cache 重用。
 - `validate`、`export` 都以每個 segment 最新的 record 為準。
 
-Provider 回傳譯文後會先通過 quality gate，通過才會標記為 `completed`。目前 gate 會拒絕：
+Provider 回傳譯文後會先通過 quality gate。檢查項目包含：
 
 - `simplified_chinese`：輸出含簡體字。
 - `added_prefix`：模型自行加上章節、段落或括號式前綴。
@@ -185,7 +185,97 @@ Provider 回傳譯文後會先通過 quality gate，通過才會標記為 `compl
 - `explanation_prefix`：輸出以說明文字開頭，例如 `Here is the translation:`。
 - `untranslated_text`：譯文 ASCII 字母比例 ≥ 0.75 且原文為英文，表示 AI 原文回顯未翻譯。
 
-命中 quality gate 的 record 會標記為 `quality_failed`，不算 completed，也不會進 cache。
+### Quality severity（寬鬆 / 嚴格模式）
+
+預設為**寬鬆模式**（`quality.strict_mode: false`），優先完成整本書；少量可讀性問題記為 **warning**，不阻擋 export。
+
+```yaml
+quality:
+  strict_mode: false
+  hard_fail:
+    - empty_content
+    - markdown_fence
+    - explanation_prefix
+    - untranslated_text
+  warning_only:
+    - simplified_chinese
+    - added_prefix
+  simplified_chinese:
+    max_error_chars: 3
+    max_error_ratio: 0.01
+    treat_as_warning_below_threshold: true
+```
+
+| 模式 | 行為 |
+|---|---|
+| `strict_mode: false`（預設） | `warning_only` 與低於門檻的 `simplified_chinese` 只記 warning，segment 仍為 `completed` |
+| `strict_mode: true` | 所有 quality issue 皆為 hard fail，segment 標記 `quality_failed` |
+
+範例：`美国軍隊` 僅含 1 個簡體字 `国`，寬鬆模式下為 warning、可完成；超過 `max_error_chars` 或 `max_error_ratio` 才 hard fail。
+
+- warning-only 的 `completed` record 會保存 `quality_warnings` / `quality_matches`，**不**算 missing，**不**觸發 fallback。
+- hard fail 才標記 `quality_failed`、保存 `quality_errors`，並可觸發 fallback（僅 hard-fail 類型）。
+- `validation_report.json` 同時輸出 warnings 與 errors（含 `matches`）。
+
+### Batched segment translation（加速，不靠提高 RPM）
+
+預設 `translation.mode: segment` 維持一段一 request。大書可改用 `segment_batch`：
+
+```yaml
+translation:
+  mode: segment_batch
+  segments_per_request: 5
+  max_chars_per_request: 6000
+  preserve_segment_order: true
+```
+
+速度估算（RPM=10）：
+
+| 模式 | 1980 段 | 最短時間 |
+|---|---|---|
+| 一段一 request | 1980 requests | ~198 分鐘 |
+| 5 段一 request | 396 requests | ~40 分鐘 |
+| 10 段一 request | 198 requests | ~20 分鐘 |
+
+行為摘要：
+
+- batch planner 依序組批，排除 cache hit 與已完成段落。
+- 單次 request 以 JSON array 送多段、要求 JSON array 回傳。
+- 每段仍獨立跑 quality gate；某段 warning 不影響其他段，某段 hard fail 只影響該段。
+- cache hit 不送 API；`reused_from_segment_id` 行為不變。
+- `retry-failed` / `retry-quality-failed` / `force-segment` 自動退回 single-segment 模式（較穩）。
+- **限制**：整批 request 失敗（timeout / 5xx / invalid JSON）會整批 fallback 重跑；批內少數段 hard fail 不會重翻已成功段落，請用 `retry-quality-failed` 單段修復。
+
+大書建議設定：
+
+```yaml
+quality:
+  strict_mode: false
+  warning_only:
+    - simplified_chinese
+    - added_prefix
+  hard_fail:
+    - empty_content
+    - markdown_fence
+    - explanation_prefix
+    - untranslated_text
+  simplified_chinese:
+    max_error_chars: 3
+    max_error_ratio: 0.01
+    treat_as_warning_below_threshold: true
+
+translation:
+  mode: segment_batch
+  segments_per_request: 5
+  max_chars_per_request: 6000
+  preserve_segment_order: true
+
+provider:
+  model: "your-primary-model"
+  fallback_models:
+    - "your-fallback-model-1"
+    - "your-fallback-model-2"
+```
 
 重試與重翻控制：
 

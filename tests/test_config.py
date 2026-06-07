@@ -53,6 +53,9 @@ def test_defaults_applied(tmp_path, monkeypatch):
     assert cfg.limits.concurrency == 2
     assert cfg.resume.max_retries == 3
     assert cfg.quality.max_length_ratio == 3.0
+    assert cfg.quality.strict_mode is False
+    assert cfg.translation.mode == "segment"
+    assert cfg.translation.segments_per_request == 1
 
 
 def test_provider_url_stored(tmp_path, monkeypatch):

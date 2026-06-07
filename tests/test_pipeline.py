@@ -243,7 +243,7 @@ async def test_failed_then_success_makes_validate_pass(tmp_path, sample_epub_pat
     segments = ckpt.load_segments()
     before = ckpt.load_all_translations()
     pairs_before = [(s, before[s.segment_id]) for s in segments if s.segment_id in before]
-    report_before = validate_translations(pairs_before, QualityConfig())
+    report_before = validate_translations(pairs_before, QualityConfig(strict_mode=True))
     assert report_before.errors >= len(fail_ids)
 
     # Retry-failed succeeds
@@ -254,7 +254,7 @@ async def test_failed_then_success_makes_validate_pass(tmp_path, sample_epub_pat
     # After retry: the previously failed segments now validate clean
     after = ckpt.load_all_translations()
     pairs_after = [(s, after[s.segment_id]) for s in segments if s.segment_id in after]
-    report_after = validate_translations(pairs_after, QualityConfig())
+    report_after = validate_translations(pairs_after, QualityConfig(strict_mode=True))
     failed_checks = [i for i in report_after.issues if i.check == "translation_failed"]
     assert failed_checks == []
 
@@ -345,7 +345,7 @@ async def test_quality_failed_retry_makes_validate_pass(tmp_path, sample_epub_pa
     # Before retry: those segments are quality-failed
     before = ckpt.load_all_translations()
     pairs_before = [(s, before[s.segment_id]) for s in segments if s.segment_id in before]
-    assert quality_failed_segment_ids(pairs_before, QualityConfig()) == bad_ids
+    assert quality_failed_segment_ids(pairs_before, QualityConfig(strict_mode=True)) == bad_ids
 
     # Quality retry succeeds with clean output
     p2 = _QualityProvider(bad_ids, clean=True)
@@ -355,7 +355,7 @@ async def test_quality_failed_retry_makes_validate_pass(tmp_path, sample_epub_pa
     # After retry: no quality failures remain (old bad records no longer pollute state)
     after = ckpt.load_all_translations()
     pairs_after = [(s, after[s.segment_id]) for s in segments if s.segment_id in after]
-    assert quality_failed_segment_ids(pairs_after, QualityConfig()) == set()
+    assert quality_failed_segment_ids(pairs_after, QualityConfig(strict_mode=True)) == set()
     # The latest record for a fixed bad segment is the clean one (attempt incremented)
     latest = after[segs[0].segment_id]
     assert latest.status == "completed"
@@ -389,7 +389,7 @@ async def test_quality_failed_retry_still_flags_if_still_bad(tmp_path, sample_ep
     after = ckpt.load_all_translations()
     pairs_after = [(s, after[s.segment_id]) for s in segments if s.segment_id in after]
     # Still flagged as quality-failed
-    assert bad_ids.issubset(quality_failed_segment_ids(pairs_after, QualityConfig()))
+    assert bad_ids.issubset(quality_failed_segment_ids(pairs_after, QualityConfig(strict_mode=True)))
 
 
 # ---------------------------------------------------------------------------

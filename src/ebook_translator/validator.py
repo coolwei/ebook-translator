@@ -28,6 +28,20 @@ class ValidationReport:
     errors: int
 
 
+@dataclass
+class QualityGateResult:
+    errors: list[ValidationIssue]
+    warnings: list[ValidationIssue]
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.errors)
+
+    @property
+    def has_warnings(self) -> bool:
+        return bool(self.warnings)
+
+
 def _count_html_tags(html: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for m in re.finditer(r"<([a-zA-Z][a-zA-Z0-9]*)[^>]*>", html):
@@ -425,30 +439,35 @@ def validate_translations(
         if issue:
             issues.append(issue)
 
+        gate_issues: list[ValidationIssue] = []
         if config.validate_simplified_chinese:
             issue = detect_simplified_chinese(segment, record)
             if issue:
-                issues.append(issue)
+                gate_issues.append(issue)
 
         if config.validate_added_prefix:
             issue = detect_added_prefix(segment, record)
             if issue:
-                issues.append(issue)
+                gate_issues.append(issue)
 
         if config.validate_markdown_fence:
             issue = detect_markdown_fence(segment, record)
             if issue:
-                issues.append(issue)
+                gate_issues.append(issue)
 
         if config.validate_explanation_prefix:
             issue = detect_explanation_prefix(segment, record)
             if issue:
-                issues.append(issue)
+                gate_issues.append(issue)
 
         if config.validate_untranslated_text:
             issue = detect_untranslated_text(segment, record, config.untranslated_ascii_threshold)
             if issue:
-                issues.append(issue)
+                gate_issues.append(issue)
+
+        gate = classify_quality_issues(gate_issues, record.translation, config)
+        issues.extend(gate.errors)
+        issues.extend(gate.warnings)
 
     total = len(pairs)
     warnings = sum(1 for i in issues if i.severity == "warning")
@@ -469,17 +488,116 @@ QUALITY_CHECKS = frozenset(
     {"simplified_chinese", "added_prefix", "markdown_fence", "explanation_prefix", "untranslated_text"}
 )
 
+_CONFIG_CHECK_ALIASES = {
+    "empty_translation": "empty_content",
+}
+
+
+def _config_check_name(check: str) -> str:
+    return _CONFIG_CHECK_ALIASES.get(check, check)
+
+
+def _simplified_below_warning_threshold(
+    issue: ValidationIssue,
+    translation: str,
+    config: QualityConfig,
+) -> bool:
+    if not config.simplified_chinese.treat_as_warning_below_threshold:
+        return False
+    n_chars = len(issue.matches)
+    text_len = max(len(translation), 1)
+    ratio = n_chars / text_len
+    return (
+        n_chars <= config.simplified_chinese.max_error_chars
+        or ratio <= config.simplified_chinese.max_error_ratio
+    )
+
+
+def resolve_issue_severity(
+    issue: ValidationIssue,
+    translation: str,
+    config: QualityConfig,
+) -> Literal["warning", "error"]:
+    """Map a detected quality issue to warning or error per config severity."""
+    check = issue.check
+    if check == "simplified_chinese":
+        if config.strict_mode:
+            return "error"
+        if _simplified_below_warning_threshold(issue, translation, config):
+            return "warning"
+        return "error"
+
+    if config.strict_mode:
+        if check in QUALITY_CHECKS or check == "empty_translation":
+            return "error"
+        return issue.severity
+
+    config_name = _config_check_name(check)
+    if config_name in config.warning_only:
+        return "warning"
+    if config_name in config.hard_fail:
+        return "error"
+    if check in QUALITY_CHECKS:
+        return "warning"
+    return issue.severity
+
+
+def classify_quality_issues(
+    issues: list[ValidationIssue],
+    translation: str,
+    config: QualityConfig,
+) -> QualityGateResult:
+    errors: list[ValidationIssue] = []
+    warnings: list[ValidationIssue] = []
+    for issue in issues:
+        severity = resolve_issue_severity(issue, translation, config)
+        classified = ValidationIssue(
+            segment_id=issue.segment_id,
+            check=issue.check,
+            severity=severity,
+            detail=issue.detail,
+            matches=list(issue.matches),
+        )
+        if severity == "error":
+            errors.append(classified)
+        else:
+            warnings.append(classified)
+    return QualityGateResult(errors=errors, warnings=warnings)
+
+
+def evaluate_quality_gate(
+    segment: Segment,
+    translation: str,
+    config: QualityConfig,
+) -> QualityGateResult:
+    """Run live quality checks and classify into hard-fail errors vs warnings."""
+    issues = check_quality(segment, translation, config)
+    if not translation.strip():
+        issues.append(
+            ValidationIssue(
+                segment_id=segment.segment_id,
+                check="empty_content",
+                severity="error",
+                detail="Translation is empty.",
+            )
+        )
+    return classify_quality_issues(issues, translation, config)
+
+
+def has_hard_quality_fail(result: QualityGateResult) -> bool:
+    return result.has_errors
+
 
 def quality_failed_segment_ids(
     pairs: list[tuple[Segment, TranslationRecord]],
     config: QualityConfig,
 ) -> set[str]:
-    """Return segment_ids whose latest record is quality-failed.
+    """Return segment_ids whose latest record is quality-failed (hard fail only).
 
     Considers only the most recent record per segment. A segment is quality-failed
     when its latest record either has status ``quality_failed`` (set by the live
-    quality gate) or is ``completed`` but still trips a quality check (legacy
-    records created before the gate existed).
+    quality gate) or is ``completed`` but still trips a hard-fail quality check
+    (legacy records created before the gate existed).
     """
     latest: dict[str, tuple[Segment, TranslationRecord]] = {}
     for segment, record in pairs:
@@ -489,8 +607,10 @@ def quality_failed_segment_ids(
     for sid, (segment, record) in latest.items():
         if record.status == "quality_failed":
             result.add(sid)
-        elif record.status == "completed" and check_quality(segment, record.translation, config):
-            result.add(sid)
+        elif record.status == "completed":
+            gate = evaluate_quality_gate(segment, record.translation, config)
+            if gate.has_errors:
+                result.add(sid)
     return result
 
 

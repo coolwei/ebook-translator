@@ -17,7 +17,13 @@ from tests.conftest import MockTranslationProvider, make_sample_epub
 runner = CliRunner()
 
 
-def _write_config(tmp_path: Path, book_path: Path | None = None, *, max_retries: int = 2) -> Path:
+def _write_config(
+    tmp_path: Path,
+    book_path: Path | None = None,
+    *,
+    max_retries: int = 2,
+    quality_strict_mode: bool = False,
+) -> Path:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         "\n".join(
@@ -37,6 +43,8 @@ def _write_config(tmp_path: Path, book_path: Path | None = None, *, max_retries:
                 f"  max_retries: {max_retries}",
                 "cli:",
                 "  language: en",
+                "quality:",
+                f"  strict_mode: {'true' if quality_strict_mode else 'false'}",
             ]
         ),
         encoding="utf-8",
@@ -226,7 +234,7 @@ def test_start_quality_failed_triggers_retry_quality_failed(tmp_path):
     books_dir, book_path = _make_books_dir(tmp_path)
     _, spine_docs = read_epub(book_path)
     target = segment_all_documents(spine_docs)[0].segment_id
-    cfg = _write_config(tmp_path, book_path)
+    cfg = _write_config(tmp_path, book_path, quality_strict_mode=True)
     provider = _QualityThenRecoverProvider(target)
 
     with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=provider):

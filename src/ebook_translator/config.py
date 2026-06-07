@@ -27,6 +27,10 @@ class TranslationConfig(BaseModel):
     preserve_html_tags: bool = True
     preserve_footnotes: bool = True
     skip_existing: bool = True
+    mode: Literal["segment", "segment_batch"] = "segment"
+    segments_per_request: int = 1
+    max_chars_per_request: int = 6000
+    preserve_segment_order: bool = True
 
 
 class ProviderConfig(BaseModel):
@@ -70,6 +74,12 @@ class LoggingConfig(BaseModel):
     save_response: bool = True
 
 
+class SimplifiedChineseConfig(BaseModel):
+    max_error_chars: int = 3
+    max_error_ratio: float = 0.01
+    treat_as_warning_below_threshold: bool = True
+
+
 class QualityConfig(BaseModel):
     validate_empty_translation: bool = True
     validate_untranslated_ratio: bool = True
@@ -83,6 +93,23 @@ class QualityConfig(BaseModel):
     # Untranslated-text detection (Phase 6)
     validate_untranslated_text: bool = True
     untranslated_ascii_threshold: float = 0.75
+    # Severity controls (relaxed vs strict quality gate)
+    strict_mode: bool = False
+    hard_fail: list[str] = Field(
+        default_factory=lambda: [
+            "empty_content",
+            "markdown_fence",
+            "explanation_prefix",
+            "untranslated_text",
+        ]
+    )
+    warning_only: list[str] = Field(
+        default_factory=lambda: [
+            "simplified_chinese",
+            "added_prefix",
+        ]
+    )
+    simplified_chinese: SimplifiedChineseConfig = SimplifiedChineseConfig()
 
 
 class ContextConfig(BaseModel):

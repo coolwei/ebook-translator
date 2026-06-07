@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -108,17 +110,32 @@ class MockTranslationProvider(TranslationProvider):
         if self.call_count <= self._fail_first_n:
             raise self._fail_with("mock error")
 
-        # Clean Traditional-Chinese output that passes all quality gates
-        # (CJK-dominant, no Simplified chars, no prefix/fence/explanation).
-        # Include the sha1_prefix for per-segment uniqueness while keeping the
-        # ASCII-letter ratio well below the 0.75 untranslated_text threshold.
-        text = (
-            self._translation_fn(request.user_message)
-            if self._translation_fn
-            else f"這是已翻譯的內容（{request.segment.sha1_prefix}）"
-        )
+        if request.user_message.strip().startswith("請翻譯以下多個段落"):
+            match = re.search(r"\[[\s\S]*\]", request.user_message)
+            if not match:
+                raise ValueError("batch payload not found in user message")
+            payload = json.loads(match.group(0))
+            results = []
+            for item in payload:
+                sid = item["segment_id"]
+                if self._translation_fn:
+                    text = self._translation_fn(request.user_message)
+                else:
+                    text = f"這是已翻譯的內容（{sid}）"
+                results.append({"segment_id": sid, "translation": text})
+            translated_text = json.dumps(results, ensure_ascii=False)
+        else:
+            # Clean Traditional-Chinese output that passes all quality gates
+            # (CJK-dominant, no Simplified chars, no prefix/fence/explanation).
+            # Include the sha1_prefix for per-segment uniqueness while keeping the
+            # ASCII-letter ratio well below the 0.75 untranslated_text threshold.
+            translated_text = (
+                self._translation_fn(request.user_message)
+                if self._translation_fn
+                else f"這是已翻譯的內容（{request.segment.sha1_prefix}）"
+            )
         return TranslationResponse(
-            translated_text=text,
+            translated_text=translated_text,
             model=request.model,
             finish_reason="stop",
             prompt_tokens=10,
@@ -152,7 +169,7 @@ def make_sample_config(tmp_path: Path, epub_path: Path | None = None) -> AppConf
         limits=LimitsConfig(rpm=60, concurrency=2),
         resume=ResumeConfig(max_retries=2),
         logging=LoggingConfig(level="debug"),
-        quality=QualityConfig(),
+        quality=QualityConfig(strict_mode=True),
         context=ContextConfig(previous_segments=1),
         cli=CliConfig(language="zh-TW"),
     )

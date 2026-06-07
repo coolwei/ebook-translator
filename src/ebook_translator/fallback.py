@@ -17,6 +17,13 @@ QUALITY_FALLBACK_CHECKS = frozenset({
     "explanation_prefix",
 })
 
+HARD_FAIL_FALLBACK_CHECKS = frozenset({
+    "empty_content",
+    "untranslated_text",
+    "markdown_fence",
+    "explanation_prefix",
+})
+
 _ERROR_PHRASES = (
     "provider returned empty message content",
     "rate limit exceeded",
@@ -50,8 +57,11 @@ def should_fallback_from_exception(exc: Exception) -> bool:
     return is_error_fallback_trigger(str(exc))
 
 
-def should_fallback_from_quality(checks: str) -> bool:
-    return is_quality_fallback_trigger(checks)
+def should_fallback_from_quality(checks: str, *, strict_mode: bool = False) -> bool:
+    names = {part.strip() for part in checks.split(";") if part.strip()}
+    if strict_mode:
+        return bool(names & QUALITY_FALLBACK_CHECKS)
+    return bool(names & HARD_FAIL_FALLBACK_CHECKS)
 
 
 class ModelFallbackState:

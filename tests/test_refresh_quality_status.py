@@ -311,7 +311,7 @@ def test_validate_uses_latest_completed_after_repair(tmp_path):
     segs = checkpoint.load_segments()
     translations = checkpoint.load_all_translations()
     pairs_before = [(s, translations[s.segment_id]) for s in segs if s.segment_id in translations]
-    report_before = validate_translations(pairs_before, QualityConfig())
+    report_before = validate_translations(pairs_before, QualityConfig(strict_mode=True))
     assert report_before.errors >= 1
 
     # Run repair.
@@ -320,7 +320,7 @@ def test_validate_uses_latest_completed_after_repair(tmp_path):
     # After repair: 0 errors.
     translations_after = checkpoint.load_all_translations()
     pairs_after = [(s, translations_after[s.segment_id]) for s in segs if s.segment_id in translations_after]
-    report_after = validate_translations(pairs_after, QualityConfig())
+    report_after = validate_translations(pairs_after, QualityConfig(strict_mode=True))
     assert report_after.errors == 0, (
         f"Expected 0 errors after repair, got {report_after.errors}: "
         f"{[i.detail for i in report_after.issues]}"

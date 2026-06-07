@@ -54,6 +54,9 @@ class TranslationLogWriter:
         model: str,
         status: str,
         batch_index: int | None = None,
+        request_batch_size: int | None = None,
+        batch_parse_error: str = "",
+        missing_from_batch_response: str = "",
         error_type: str = "",
         error_message: str = "",
         fallback_from: str = "",
@@ -73,6 +76,14 @@ class TranslationLogWriter:
         ]
         if batch_index is not None:
             parts.append(f"batch_index={batch_index}")
+        if request_batch_size is not None:
+            parts.append(f"request_batch_size={request_batch_size}")
+        if batch_parse_error:
+            parts.append(f"batch_parse_error={sanitize_log_text(batch_parse_error)}")
+        if missing_from_batch_response:
+            parts.append(
+                f"missing_from_batch_response={sanitize_log_text(missing_from_batch_response)}"
+            )
         parts.extend([
             f"model={model}",
             f"status={status}",

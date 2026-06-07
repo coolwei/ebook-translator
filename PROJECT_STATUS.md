@@ -51,6 +51,16 @@ Phase 1 Definition of Done：**全部達成**。
 - `explanation_prefix`
 - `untranslated_text`
 - 另含 empty / untranslated_ratio / html_integrity / length_ratio
+- **`quality.strict_mode`**：寬鬆（預設 false）vs 嚴格；`hard_fail` / `warning_only` 可設定
+- **`quality.simplified_chinese`**：低於門檻只記 warning（如 `美国軍隊` 單一 `国`）
+- warning-only completed 保存 `quality_warnings` / `quality_matches`，不算 missing、不觸發 fallback
+
+### Batched segment translation
+- **`translation.mode`**：`segment`（預設）或 `segment_batch`
+- **`segments_per_request`** / **`max_chars_per_request`** / **`preserve_segment_order`**
+- JSON array 批次 prompt + parser；每段獨立 quality gate
+- `retry-failed` / `retry-quality-failed` / `force-segment` 退回 single-segment
+- 批級 request 失敗整批 fallback；批內少數 hard fail 由 `retry-quality-failed` 單段處理
 
 ### Segmenter 支援標籤
 - `p`、`li`、`blockquote`、`h1`–`h6`、`td`、`th`、`figcaption`、`caption`、`dt`、`dd`、div 直接文字
@@ -110,8 +120,10 @@ Windows 啟動器 `start-ebook-translator.bat` 已改用較穩健的 `python -m 
 | 段落數 | 1980 |
 | 原文字元數 | 332,071 |
 | 預估 input tokens | 110,690（rough chars/3） |
-| 預估 request 數 | 1,980 |
-| 預估最短時間（rpm=10） | 198.0 min |
+| 預估 request 數（segment 模式） | 1,980 |
+| 預估最短時間（rpm=10，一段一 request） | 198.0 min |
+| 預估最短時間（rpm=10，5 段一 request） | ~40 min |
+| 預估最短時間（rpm=10，10 段一 request） | ~20 min |
 | 含 retry overhead | 217.8 min |
 | 超過 max_segments? | 否（1980 < 2500；但**預設 300 會被擋下**，需 `--max-segments 2500`） |
 | 警告 | `long_runtime`（>60 min） |
