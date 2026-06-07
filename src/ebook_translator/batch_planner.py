@@ -24,7 +24,7 @@ def plan_translation_batches(
         raise ValueError("segments_per_request must be >= 1")
 
     logger = get_logger()
-    ordered = list(segments) if preserve_segment_order else list(segments)
+    ordered = list(segments)
     batches: list[TranslationBatch] = []
     current: list[Segment] = []
     current_chars = 0

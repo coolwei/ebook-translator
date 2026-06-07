@@ -82,5 +82,5 @@ def parse_batch_response(raw: str, expected_ids: set[str]) -> BatchParseResult:
     return BatchParseResult(
         translations=translations,
         missing_ids=missing,
-        parse_error=None if not missing else None,
+        parse_error=None,
     )
