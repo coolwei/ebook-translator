@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from .checkpoint import CheckpointManager
 from .config import AppConfig
@@ -34,7 +37,11 @@ def count_rate_limit_errors_since(job_dir: Path, since_line: int) -> int:
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     count = 0
     for line in lines[since_line:]:
-        rec = json.loads(line)
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning("Skipping corrupt JSONL line in %s", path)
+            continue
         if rec.get("status") == "failed" and is_rate_limit_error(rec.get("error")):
             count += 1
     return count

@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from ebook_translator.cli import app
 from ebook_translator.providers.base import ProviderError, TranslationResponse
+from ebook_translator.safe_mode import count_rate_limit_errors_since
 from tests.conftest import MockTranslationProvider, make_sample_epub
 from tests.test_start import _book_dir, _records, _write_config
 
@@ -307,3 +308,93 @@ def test_rate_limit_counter_uses_translation_record_errors(tmp_path):
     latest = {record["segment_id"]: record for record in _records(_book_dir(tmp_path))}
     assert latest[segments[0].segment_id]["error"] == "Rate limit exceeded: openai_error"
     assert latest[segments[1].segment_id]["error"] == "Rate limit exceeded: openai_error"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for count_rate_limit_errors_since JSONL corruption handling
+# ---------------------------------------------------------------------------
+
+def _rate_limit_record(segment_id: str = "0000:0001:aabbccdd") -> str:
+    return json.dumps({
+        "segment_id": segment_id,
+        "status": "failed",
+        "error": "Rate limit exceeded: openai_error",
+    })
+
+
+def _failed_non_rate_limit_record(segment_id: str = "0000:0002:bbccddee") -> str:
+    return json.dumps({
+        "segment_id": segment_id,
+        "status": "failed",
+        "error": "Context length exceeded",
+    })
+
+
+def _completed_record(segment_id: str = "0000:0003:ccddeeff") -> str:
+    return json.dumps({
+        "segment_id": segment_id,
+        "status": "completed",
+        "translation": "譯文",
+    })
+
+
+def _write_jsonl(job_dir: Path, lines: list[str]) -> None:
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "translations.jsonl").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+
+
+def test_count_rate_limit_normal_records(tmp_path):
+    _write_jsonl(tmp_path, [
+        _rate_limit_record("0:1:aaa"),
+        _rate_limit_record("0:2:bbb"),
+        _completed_record("0:3:ccc"),
+    ])
+    assert count_rate_limit_errors_since(tmp_path, 0) == 2
+
+
+def test_count_rate_limit_corrupt_line_does_not_crash(tmp_path):
+    _write_jsonl(tmp_path, [
+        _rate_limit_record("0:1:aaa"),
+        '{"unterminated string: ',
+        _rate_limit_record("0:2:bbb"),
+    ])
+    assert count_rate_limit_errors_since(tmp_path, 0) == 2
+
+
+def test_count_rate_limit_corrupt_line_before_valid_records(tmp_path):
+    _write_jsonl(tmp_path, [
+        '{"bad json',
+        _rate_limit_record("0:1:aaa"),
+        _rate_limit_record("0:2:bbb"),
+    ])
+    assert count_rate_limit_errors_since(tmp_path, 0) == 2
+
+
+def test_count_rate_limit_empty_lines_ignored(tmp_path):
+    job_dir = tmp_path
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "translations.jsonl").write_text(
+        _rate_limit_record("0:1:aaa") + "\n\n\n" + _rate_limit_record("0:2:bbb") + "\n",
+        encoding="utf-8",
+    )
+    assert count_rate_limit_errors_since(job_dir, 0) == 2
+
+
+def test_count_rate_limit_non_rate_limit_failed_not_counted(tmp_path):
+    _write_jsonl(tmp_path, [
+        _rate_limit_record("0:1:aaa"),
+        _failed_non_rate_limit_record("0:2:bbb"),
+        _completed_record("0:3:ccc"),
+    ])
+    assert count_rate_limit_errors_since(tmp_path, 0) == 1
+
+
+def test_count_rate_limit_since_offset_respected(tmp_path):
+    _write_jsonl(tmp_path, [
+        _rate_limit_record("0:1:aaa"),
+        _rate_limit_record("0:2:bbb"),
+        _rate_limit_record("0:3:ccc"),
+    ])
+    assert count_rate_limit_errors_since(tmp_path, 2) == 1
