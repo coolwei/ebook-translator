@@ -16,6 +16,7 @@ class ValidationIssue:
     check: str
     severity: Literal["warning", "error"]
     detail: str
+    matches: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -177,6 +178,42 @@ SIMPLIFIED_CHARS = set(
     "动励劳势勋勤区医华协单卖卢卫却厂厅历厉压厌厍县参"
 )
 
+# Best-effort Simplified → Traditional mapping for characters in SIMPLIFIED_CHARS.
+# Used to provide suggestions in quality issue reports.
+SIMPLIFIED_TO_TRADITIONAL: dict[str, str] = {
+    "开": "開", "关": "關", "门": "門", "们": "們", "这": "這",
+    "国": "國", "对": "對", "来": "來", "时": "時", "学": "學",
+    "实": "實", "发": "發", "会": "會", "样": "樣", "难": "難",
+    "应": "應", "进": "進", "过": "過", "还": "還", "说": "說",
+    "现": "現", "觉": "覺", "际": "際", "东": "東", "车": "車",
+    "书": "書", "长": "長", "马": "馬", "鸟": "鳥", "鱼": "魚",
+    "语": "語", "职": "職", "术": "術", "丽": "麗", "义": "義",
+    "乐": "樂", "买": "買", "卖": "賣", "钱": "錢", "银": "銀",
+    "铁": "鐵", "电": "電", "脑": "腦", "网": "網", "络": "絡",
+    "经": "經", "济": "濟", "临": "臨", "团": "團", "队": "隊",
+    "员": "員", "问": "問", "题": "題", "间": "間", "办": "辦",
+    "点": "點", "热": "熱", "爱": "愛", "护": "護", "尽": "盡",
+    "红": "紅", "绿": "綠", "见": "見", "观": "觀", "让": "讓",
+    "认": "認", "动": "動", "单": "單", "为": "為", "产": "產",
+    "业": "業", "丰": "豐", "专": "專", "与": "與", "丛": "叢",
+    "个": "個", "举": "舉", "乱": "亂", "争": "爭", "亏": "虧",
+    "亚": "亞", "亲": "親", "仅": "僅", "从": "從", "仑": "侖",
+    "仓": "倉", "仪": "儀", "价": "價", "众": "眾", "优": "優",
+    "传": "傳", "伤": "傷", "伦": "倫", "体": "體", "余": "餘",
+    "佣": "傭", "侠": "俠", "侣": "侶", "俭": "儉", "俩": "倆",
+    "储": "儲", "儿": "兒", "党": "黨", "兰": "蘭", "兴": "興",
+    "兵": "兵", "养": "養", "兽": "獸", "内": "內", "冈": "岡",
+    "册": "冊", "写": "寫", "军": "軍", "农": "農", "冯": "馮",
+    "冲": "衝", "决": "決", "况": "況", "减": "減", "凉": "涼",
+    "凑": "湊", "击": "擊", "凤": "鳳", "凭": "憑", "凯": "凱",
+    "刘": "劉", "则": "則", "刚": "剛", "创": "創", "删": "刪",
+    "别": "別", "剥": "剝", "剧": "劇", "劝": "勸", "务": "務",
+    "励": "勵", "劳": "勞", "势": "勢", "勋": "勳", "勤": "勤",
+    "区": "區", "医": "醫", "华": "華", "协": "協", "卢": "盧",
+    "卫": "衛", "却": "卻", "厂": "廠", "厅": "廳", "历": "歷",
+    "厉": "厲", "压": "壓", "厌": "厭", "县": "縣", "参": "參",
+}
+
 # Leading bracketed prefix such as 【第一章：…】, ［…］, [...], （…）
 _PREFIX_RE = re.compile(r"^\s*[【\[［（(][^】\]］）)]*[】\]］）)]")
 
@@ -193,15 +230,26 @@ _EXPLANATION_RE = re.compile(
 
 
 def detect_simplified_chinese(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
-    found = sorted({ch for ch in record.translation if ch in SIMPLIFIED_CHARS})
-    if found:
-        return ValidationIssue(
-            segment_id=segment.segment_id,
-            check="simplified_chinese",
-            severity="error",
-            detail=f"Translation contains Simplified Chinese characters: {''.join(found)}",
-        )
-    return None
+    text = record.translation
+    found_chars = sorted({ch for ch in text if ch in SIMPLIFIED_CHARS})
+    if not found_chars:
+        return None
+    matches = [
+        {
+            "text": ch,
+            "position": i,
+            "suggestion": SIMPLIFIED_TO_TRADITIONAL.get(ch),
+        }
+        for i, ch in enumerate(text)
+        if ch in SIMPLIFIED_CHARS
+    ]
+    return ValidationIssue(
+        segment_id=segment.segment_id,
+        check="simplified_chinese",
+        severity="error",
+        detail=f"Translation contains Simplified Chinese characters: {''.join(found_chars)}",
+        matches=matches,
+    )
 
 
 def detect_added_prefix(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
@@ -451,6 +499,7 @@ def save_validation_report(report: ValidationReport, output_dir: Path) -> None:
                 "check": i.check,
                 "severity": i.severity,
                 "detail": i.detail,
+                **({"matches": i.matches} if i.matches else {}),
             }
             for i in report.issues
         ],

@@ -55,11 +55,15 @@ def pending_segment_count(job_dir: Path, cfg: AppConfig, segment_count: int) -> 
 
     completed = checkpoint.load_completed_ids()
     failed = checkpoint.load_failed_ids()
+    # quality_failed segments are retried by the post-batch workflow, not the main
+    # batch loop. Excluding them prevents an infinite loop when quality keeps failing.
+    quality_failed = checkpoint.load_quality_failed_ids()
     retry_failed = cfg.resume.retry_failed
     return sum(
         1
         for seg in segments
         if seg.segment_id not in completed
+        and seg.segment_id not in quality_failed
         and (retry_failed or seg.segment_id not in failed)
     )
 

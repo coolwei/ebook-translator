@@ -112,6 +112,7 @@ async def _do_translate(
         *,
         fallback_from: str | None = None,
         fallback_attempt: int | None = None,
+        quality_matches: list | None = None,
     ) -> TranslationRecord:
         return TranslationRecord(
             segment_id=seg.segment_id,
@@ -124,6 +125,7 @@ async def _do_translate(
             error=error or None,
             fallback_from=fallback_from,
             fallback_attempt=fallback_attempt,
+            quality_matches=quality_matches,
             created_at=datetime.now(timezone.utc),
         )
 
@@ -161,6 +163,7 @@ async def _do_translate(
     last_model = models_to_try[-1]
     last_error = ""
     last_translation = ""
+    last_quality_matches: list | None = None
 
     for model_index, model in enumerate(models_to_try):
         request = TranslationRequest(
@@ -183,10 +186,12 @@ async def _do_translate(
             issues = check_quality(seg, response.translated_text, config.quality)
             if issues:
                 checks = "; ".join(i.check for i in issues)
+                q_matches = [m for issue in issues for m in issue.matches] or None
                 last_status = "quality_failed"
                 last_model = response.model
                 last_error = checks
                 last_translation = response.translated_text
+                last_quality_matches = q_matches
                 duration_ms = int((time.monotonic() - started) * 1000)
                 _log_attempt(
                     model=response.model,
@@ -220,6 +225,7 @@ async def _do_translate(
                     response.model,
                     checks,
                     response.translated_text,
+                    quality_matches=q_matches,
                 )
 
             duration_ms = int((time.monotonic() - started) * 1000)
@@ -293,6 +299,7 @@ async def _do_translate(
         last_translation,
         fallback_from=models_to_try[-2] if len(models_to_try) > 1 else None,
         fallback_attempt=len(models_to_try) - 1 if len(models_to_try) > 1 else None,
+        quality_matches=last_quality_matches,
     )
 
 

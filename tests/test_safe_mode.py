@@ -398,3 +398,173 @@ def test_count_rate_limit_since_offset_respected(tmp_path):
         _rate_limit_record("0:3:ccc"),
     ])
     assert count_rate_limit_errors_since(tmp_path, 2) == 1
+
+
+# ---------------------------------------------------------------------------
+# pending_segment_count excludes quality_failed
+# ---------------------------------------------------------------------------
+
+def test_pending_segment_count_excludes_quality_failed(tmp_path):
+    """quality_failed segments should not be counted as pending."""
+    import json
+    from ebook_translator.safe_mode import pending_segment_count
+    from tests.conftest import make_sample_config, make_sample_epub
+
+    epub_path = make_sample_epub(tmp_path)
+    cfg = make_sample_config(tmp_path, epub_path)
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    # Write one segment and one quality_failed translation record.
+    (job_dir / "segments.jsonl").write_text(
+        json.dumps({
+            "segment_id": "0000:0000:aabb",
+            "chapter_index": 0,
+            "block_index": 0,
+            "sha1_prefix": "aabb",
+            "source_text": "Hello",
+            "source_html": "Hello",
+            "tag_name": "p",
+            "chapter_href": "chap01.xhtml",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    from datetime import datetime, timezone
+    (job_dir / "translations.jsonl").write_text(
+        json.dumps({
+            "segment_id": "0000:0000:aabb",
+            "source_hash": "aabb",
+            "status": "quality_failed",
+            "source": "Hello",
+            "translation": "这是简体",
+            "model": "test",
+            "attempt": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    # With 1 quality_failed segment, pending count should be 0 (excluded).
+    assert pending_segment_count(job_dir, cfg, 1) == 0
+
+
+# ---------------------------------------------------------------------------
+# --stop-on-no-progress-count stops the safe mode loop
+# ---------------------------------------------------------------------------
+
+def test_safe_mode_no_progress_stops(tmp_path):
+    """Safe mode should stop after N consecutive batches with no new completions.
+
+    With retry_failed=true (default), failed segments stay in the pending count
+    and are re-attempted each batch. If the provider always fails, no new
+    completions ever occur and --stop-on-no-progress-count should trigger.
+    """
+    from ebook_translator.providers.base import ProviderError
+
+    books_dir, book_path = _make_books_dir(tmp_path)
+    # max_retries=0 means no scheduler-level retries; the provider always raises.
+    # retry_failed stays true (default) so failed segs are counted as pending.
+    cfg = _write_config(tmp_path, book_path, max_retries=0)
+
+    class _AlwaysFailProvider(MockTranslationProvider):
+        async def translate(self, request):
+            self.call_count += 1
+            raise ProviderError("Persistent error — cannot fix")
+
+    provider = _AlwaysFailProvider()
+
+    with patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=provider):
+        result = runner.invoke(
+            app,
+            [
+                "start",
+                "--config", str(cfg),
+                "--books-dir", str(books_dir),
+                "--yes",
+                "--batch-size", "5",
+                "--stop-on-no-progress-count", "2",
+            ],
+            env={"FAKE_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    # Should stop after 2 batches with no new completions.
+    output = result.output
+    assert "Stopped:" in output, f"Expected 'Stopped:' in output:\n{output}"
+    assert "consecutive" in output or "no new completion" in output.lower(), (
+        f"Expected no-progress message in output:\n{output}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# repair-jsonl CLI
+# ---------------------------------------------------------------------------
+
+def test_repair_jsonl_bom_first_line_preserved(tmp_path):
+    """A valid JSON first line with a UTF-8 BOM must not be deleted."""
+    import json
+    from ebook_translator.cli import app as cli_app
+
+    job_dir = tmp_path / "test-job"
+    job_dir.mkdir()
+
+    valid_line = json.dumps({"segment_id": "0:0:aaa", "status": "completed", "translation": "譯文"})
+    # Write with BOM.
+    (job_dir / "translations.jsonl").write_bytes(
+        b"\xef\xbb\xbf" + valid_line.encode("utf-8") + b"\n"
+    )
+
+    result = runner.invoke(cli_app, ["repair-jsonl", str(job_dir)])
+    assert result.exit_code == 0, result.output
+
+    content = (job_dir / "translations.jsonl").read_text(encoding="utf-8")
+    kept = [l for l in content.splitlines() if l.strip()]
+    assert len(kept) == 1, "BOM first line should be kept"
+    assert json.loads(kept[0])["segment_id"] == "0:0:aaa"
+
+
+def test_repair_jsonl_removes_corrupt_lines(tmp_path):
+    """Corrupt JSONL lines must be removed; valid lines must be kept."""
+    import json
+    from ebook_translator.cli import app as cli_app
+
+    job_dir = tmp_path / "test-job"
+    job_dir.mkdir()
+
+    valid1 = json.dumps({"segment_id": "0:0:aaa", "status": "completed"})
+    corrupt = '{"unterminated'
+    valid2 = json.dumps({"segment_id": "0:1:bbb", "status": "completed"})
+
+    (job_dir / "translations.jsonl").write_text(
+        "\n".join([valid1, corrupt, valid2]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli_app, ["repair-jsonl", str(job_dir)])
+    assert result.exit_code == 0, result.output
+    assert "1 bad removed" in result.output
+
+    content = (job_dir / "translations.jsonl").read_text(encoding="utf-8")
+    kept = [l for l in content.splitlines() if l.strip()]
+    assert len(kept) == 2
+    assert json.loads(kept[0])["segment_id"] == "0:0:aaa"
+    assert json.loads(kept[1])["segment_id"] == "0:1:bbb"
+
+
+def test_repair_jsonl_creates_backup(tmp_path):
+    """repair-jsonl must create a .bak backup before modifying the file."""
+    import json
+    from ebook_translator.cli import app as cli_app
+
+    job_dir = tmp_path / "test-job"
+    job_dir.mkdir()
+
+    (job_dir / "translations.jsonl").write_text(
+        json.dumps({"segment_id": "0:0:aaa"}) + "\n",
+        encoding="utf-8",
+    )
+
+    runner.invoke(cli_app, ["repair-jsonl", str(job_dir)])
+
+    assert (job_dir / "translations.jsonl.bak").exists()

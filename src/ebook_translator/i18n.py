@@ -74,6 +74,8 @@ _ZH_TW: dict[str, str] = {
     "safe_mode_batch_done": "第 {batch} 批完成",
     "safe_mode_cooldown": "批次間冷卻 {seconds} 秒…",
     "safe_mode_stopped_rate_limit": "已停止：累積 rate limit 錯誤達 {count} 次（門檻 {threshold}）",
+    "safe_mode_stop_on_no_progress": "無進展停止門檻（批次數）",
+    "safe_mode_stopped_no_progress": "已停止：連續 {count} 批無新完成段落（門檻 {threshold}）。請用 explain-quality 或 patch-segment 排查。",
 
     # cli.py — common
     "no_segments_found": "找不到段落。請先執行翻譯。",
@@ -161,6 +163,8 @@ _EN: dict[str, str] = {
     "safe_mode_batch_done": "Batch {batch} complete",
     "safe_mode_cooldown": "Cooldown between batches: {seconds}s…",
     "safe_mode_stopped_rate_limit": "Stopped: accumulated {count} rate limit error(s) (threshold {threshold})",
+    "safe_mode_stop_on_no_progress": "Stop on no-progress batch count",
+    "safe_mode_stopped_no_progress": "Stopped: {count} consecutive batch(es) with no new completions (threshold {threshold}). Use 'explain-quality' or 'patch-segment' to investigate.",
 
     # cli.py — common
     "no_segments_found": "No segments found. Run translate first.",

@@ -177,10 +177,75 @@ def test_detect_simplified_chinese_flags_simplified():
     assert issue.severity == "error"
 
 
+def test_detect_simplified_chinese_returns_matches():
+    seg = make_segment()
+    rec = make_record("美国军队")  # 国 is Simplified
+    issue = detect_simplified_chinese(seg, rec)
+    assert issue is not None
+    assert issue.matches, "matches should not be empty"
+    texts = [m["text"] for m in issue.matches]
+    assert "国" in texts
+    # Position should be correct (国 is at index 1)
+    pos_map = {m["text"]: m["position"] for m in issue.matches}
+    assert pos_map["国"] == 1
+    # Suggestion should be Traditional form
+    suggestions = {m["text"]: m["suggestion"] for m in issue.matches}
+    assert suggestions["国"] == "國"
+
+
+def test_detect_simplified_chinese_traditional_not_flagged():
+    seg = make_segment()
+    rec = make_record("美國軍隊")  # 國 is Traditional — should not trigger
+    assert detect_simplified_chinese(seg, rec) is None
+
+
 def test_detect_simplified_chinese_passes_traditional():
     seg = make_segment()
     rec = make_record("這是開端，那是一個明亮的寒冷四月天。")
     assert detect_simplified_chinese(seg, rec) is None
+
+
+def test_detect_simplified_chinese_matches_include_all_occurrences():
+    seg = make_segment()
+    rec = make_record("这国这")  # 这 appears twice, 国 once
+    issue = detect_simplified_chinese(seg, rec)
+    assert issue is not None
+    assert len(issue.matches) == 3  # two 这 + one 国
+
+
+def test_save_validation_report_includes_matches(tmp_path):
+    from ebook_translator.validator import ValidationReport, ValidationIssue, save_validation_report
+    issue = ValidationIssue(
+        segment_id="0:0:aa",
+        check="simplified_chinese",
+        severity="error",
+        detail="contains simplified",
+        matches=[{"text": "国", "position": 1, "suggestion": "國"}],
+    )
+    report = ValidationReport(total_checked=1, issues=[issue], passed=0, warnings=0, errors=1)
+    save_validation_report(report, tmp_path)
+    import json
+    data = json.loads((tmp_path / "validation_report.json").read_text(encoding="utf-8"))
+    saved_issue = data["issues"][0]
+    assert "matches" in saved_issue
+    assert saved_issue["matches"][0]["text"] == "国"
+    assert saved_issue["matches"][0]["suggestion"] == "國"
+
+
+def test_save_validation_report_no_matches_omitted(tmp_path):
+    from ebook_translator.validator import ValidationReport, ValidationIssue, save_validation_report
+    issue = ValidationIssue(
+        segment_id="0:0:aa",
+        check="empty_translation",
+        severity="error",
+        detail="empty",
+    )
+    report = ValidationReport(total_checked=1, issues=[issue], passed=0, warnings=0, errors=1)
+    save_validation_report(report, tmp_path)
+    import json
+    data = json.loads((tmp_path / "validation_report.json").read_text(encoding="utf-8"))
+    saved_issue = data["issues"][0]
+    assert "matches" not in saved_issue
 
 
 def test_detect_added_prefix_flags_chapter_prefix():

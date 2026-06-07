@@ -63,6 +63,13 @@ class CheckpointManager:
             if record.status == "failed"
         }
 
+    def load_quality_failed_ids(self) -> set[str]:
+        return {
+            sid
+            for sid, record in self.load_all_translations().items()
+            if record.status == "quality_failed"
+        }
+
     def load_all_translations(self) -> dict[str, TranslationRecord]:
         records: dict[str, TranslationRecord] = {}
         if not self._translations_path.exists():

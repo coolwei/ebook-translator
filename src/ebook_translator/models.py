@@ -31,6 +31,8 @@ class TranslationRecord(BaseModel):
     reused_from_segment_id: str | None = None
     fallback_from: str | None = None
     fallback_attempt: int | None = None
+    # Structured match details from quality checks (e.g. simplified_chinese positions).
+    quality_matches: list | None = None
     created_at: datetime
 
 

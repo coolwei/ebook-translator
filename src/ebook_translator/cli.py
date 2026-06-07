@@ -78,6 +78,7 @@ def _print_safe_mode_plan(
     batch_size: int,
     cooldown_seconds: int,
     stop_on_rate_limit_count: int,
+    stop_on_no_progress_count: int,
 ) -> None:
     from .i18n import t
     from .safe_mode import estimate_batch_count
@@ -96,6 +97,8 @@ def _print_safe_mode_plan(
     typer.echo(f"  {t('safe_mode_cooldown_seconds', lang)}: {cooldown_seconds}")
     threshold = stop_on_rate_limit_count if stop_on_rate_limit_count > 0 else "disabled"
     typer.echo(f"  {t('safe_mode_stop_on_rate_limit', lang)}: {threshold}")
+    np_threshold = stop_on_no_progress_count if stop_on_no_progress_count > 0 else "disabled"
+    typer.echo(f"  {t('safe_mode_stop_on_no_progress', lang)}: {np_threshold}")
 
 
 def _run_post_batch_exports_only(job_dir: Path, cfg) -> None:
@@ -144,6 +147,7 @@ def _run_safe_mode_translation(
     batch_size: int,
     cooldown_seconds: int,
     stop_on_rate_limit_count: int,
+    stop_on_no_progress_count: int,
     limit: int | None,
 ) -> None:
     from .i18n import t
@@ -157,6 +161,7 @@ def _run_safe_mode_translation(
 
     remaining_limit = limit
     session_rate_limit_count = 0
+    no_progress_count = 0
     batch_num = 0
 
     while True:
@@ -183,6 +188,12 @@ def _run_safe_mode_translation(
         session_rate_limit_count += batch_rate_limits
         completed_after = len(checkpoint.load_completed_ids())
 
+        # Track no-progress batches (no new completions).
+        if completed_after > completed_before:
+            no_progress_count = 0
+        else:
+            no_progress_count += 1
+
         rate_limit_stop = (
             stop_on_rate_limit_count > 0
             and session_rate_limit_count >= stop_on_rate_limit_count
@@ -203,6 +214,18 @@ def _run_safe_mode_translation(
                     lang,
                     count=session_rate_limit_count,
                     threshold=stop_on_rate_limit_count,
+                ),
+                err=True,
+            )
+            break
+
+        if stop_on_no_progress_count > 0 and no_progress_count >= stop_on_no_progress_count:
+            typer.echo(
+                t(
+                    "safe_mode_stopped_no_progress",
+                    lang,
+                    count=no_progress_count,
+                    threshold=stop_on_no_progress_count,
                 ),
                 err=True,
             )
@@ -326,6 +349,11 @@ def start(
         "--stop-on-rate-limit-count",
         help="Stop after N rate-limit errors in this run (0 = disabled)",
     ),
+    stop_on_no_progress_count: int = typer.Option(
+        2,
+        "--stop-on-no-progress-count",
+        help="Stop safe mode after N consecutive batches with no new completions (0 = disabled)",
+    ),
 ) -> None:
     """Run the full translation workflow for EPUBs in books/."""
     load_dotenv(encoding="utf-8-sig")
@@ -388,6 +416,7 @@ def start(
                     batch_size=batch_size,
                     cooldown_seconds=cooldown_seconds,
                     stop_on_rate_limit_count=stop_on_rate_limit_count,
+                    stop_on_no_progress_count=stop_on_no_progress_count,
                 )
             typer.echo(t("dry_run_complete", lang))
             continue
@@ -415,6 +444,7 @@ def start(
                 batch_size=batch_size,
                 cooldown_seconds=cooldown_seconds,
                 stop_on_rate_limit_count=stop_on_rate_limit_count,
+                stop_on_no_progress_count=stop_on_no_progress_count,
                 limit=limit,
             )
         else:
@@ -590,6 +620,140 @@ def export(
     # Export only re-renders from the checkpoint; no API key needed.
     cfg = _load_config_or_exit(config, require_api_key=False)
     run_export(job, cfg)
+
+
+@app.command(name="explain-quality")
+def explain_quality(
+    output_dir: Path = typer.Argument(..., help="Path to job output directory"),
+    segment_id: str = typer.Argument(..., help="Segment ID to inspect"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Optional config file for quality settings"),
+) -> None:
+    """Show detailed quality issue information for a specific segment.
+
+    Loads the segment source and latest translation from the job directory,
+    re-runs quality checks, and displays matched characters with positions
+    and Traditional Chinese suggestions.
+    """
+    from .checkpoint import CheckpointManager
+    from .config import QualityConfig
+    from .validator import check_quality
+
+    if not output_dir.is_dir():
+        typer.echo(f"Directory not found: {output_dir}", err=True)
+        raise typer.Exit(1)
+
+    checkpoint = CheckpointManager(output_dir)
+    segments = checkpoint.load_segments()
+    seg = next((s for s in segments if s.segment_id == segment_id), None)
+    if seg is None:
+        typer.echo(f"Segment not found in segments.jsonl: {segment_id}", err=True)
+        raise typer.Exit(1)
+
+    all_translations = checkpoint.load_all_translations()
+    record = all_translations.get(segment_id)
+
+    typer.echo(f"segment_id  : {seg.segment_id}")
+    typer.echo(f"source      : {seg.source_text[:300]}")
+
+    if record is None:
+        typer.echo("No translation record found.")
+        return
+
+    typer.echo(f"translation : {record.translation[:300]}")
+    typer.echo(f"status      : {record.status}")
+    typer.echo(f"model       : {record.model}")
+    typer.echo(f"attempt     : {record.attempt}")
+    typer.echo(f"error       : {record.error}")
+
+    # Re-run quality checks to get live match details.
+    quality_cfg: QualityConfig
+    if config is not None:
+        try:
+            cfg_obj = _load_config_or_exit(config, require_api_key=False)
+            quality_cfg = cfg_obj.quality
+        except Exception:
+            quality_cfg = QualityConfig()
+    else:
+        quality_cfg = QualityConfig()
+
+    issues = check_quality(seg, record.translation, quality_cfg)
+
+    if not issues:
+        typer.echo("quality issues: (none)")
+    else:
+        typer.echo("quality issues:")
+        for issue in issues:
+            typer.echo(f"  check     : {issue.check}")
+            typer.echo(f"  severity  : {issue.severity}")
+            typer.echo(f"  detail    : {issue.detail}")
+            if issue.matches:
+                typer.echo("  matches   :")
+                for m in issue.matches:
+                    sug = m.get("suggestion")
+                    typer.echo(
+                        f"    text={m['text']!r}  pos={m['position']}  suggestion={sug!r}"
+                    )
+            typer.echo("")
+
+    # Also show stored matches from translation time if available.
+    if record.quality_matches:
+        typer.echo("stored matches (recorded at translation time):")
+        for m in record.quality_matches:
+            sug = m.get("suggestion")
+            typer.echo(f"  text={m['text']!r}  pos={m['position']}  suggestion={sug!r}")
+
+
+@app.command(name="repair-jsonl")
+def repair_jsonl(
+    output_dir: Path = typer.Argument(..., help="Path to job output directory"),
+) -> None:
+    """Back up and repair corrupt JSONL lines in translations.jsonl and segments.jsonl.
+
+    Uses utf-8-sig encoding to handle BOM files correctly (the BOM is stripped
+    automatically, so a valid JSON first line is not misidentified as corrupt).
+    Creates .bak backups before modifying files.
+    """
+    import json
+    import shutil
+
+    if not output_dir.is_dir():
+        typer.echo(f"Directory not found: {output_dir}", err=True)
+        raise typer.Exit(1)
+
+    for filename in ("translations.jsonl", "segments.jsonl"):
+        src = output_dir / filename
+        if not src.exists():
+            typer.echo(f"  {filename}: not found, skipping")
+            continue
+
+        # utf-8-sig strips BOM from the start of the file transparently.
+        content = src.read_text(encoding="utf-8-sig")
+        lines = content.splitlines()
+
+        valid_lines: list[str] = []
+        bad_count = 0
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                json.loads(stripped)
+                valid_lines.append(stripped)
+            except json.JSONDecodeError:
+                bad_count += 1
+                preview = stripped[:80]
+                typer.echo(f"  {filename}: removing bad line: {preview!r}")
+
+        bak = output_dir / (filename + ".bak")
+        shutil.copy2(src, bak)
+
+        new_content = "\n".join(valid_lines) + ("\n" if valid_lines else "")
+        src.write_text(new_content, encoding="utf-8")
+
+        typer.echo(
+            f"  {filename}: {len(valid_lines)} valid kept, {bad_count} bad removed"
+            f"  (backup: {bak.name})"
+        )
 
 
 @app.command(name="report-missing")
