@@ -17,7 +17,7 @@ class ProjectConfig(BaseModel):
 
 
 class InputConfig(BaseModel):
-    path: Path
+    path: Path | None = None
 
 
 class TranslationConfig(BaseModel):
@@ -137,7 +137,7 @@ class OutputConfig(BaseModel):
 
 class AppConfig(BaseModel):
     project: ProjectConfig = ProjectConfig()
-    input: InputConfig
+    input: InputConfig = InputConfig()
     translation: TranslationConfig = TranslationConfig()
     provider: ProviderConfig
     limits: LimitsConfig = LimitsConfig()

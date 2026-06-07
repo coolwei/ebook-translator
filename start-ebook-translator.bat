@@ -37,7 +37,7 @@ echo.
 echo ============================================
 echo   Ebook Translator
 echo ============================================
-echo   1  start      - 翻譯（讀取 config.yaml）
+echo   1  start      - 翻譯（讀取 config.yaml，掃描 input/）
 echo   2  dry-run    - 估算，不呼叫 API
 echo   3  inspect    - 檢查書籍結構
 echo   4  estimate   - 估算 token 用量

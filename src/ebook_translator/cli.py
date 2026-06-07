@@ -327,7 +327,7 @@ def estimate(
 @app.command()
 def start(
     config: Path = typer.Option(Path("config.yaml"), "--config", "-c", help="Path to config YAML file"),
-    books_dir: Path = typer.Option(Path("books"), "--books-dir", help="Directory containing EPUB files"),
+    books_dir: Path = typer.Option(Path("input"), "--books-dir", help="Directory containing EPUB files (default: input/)"),
     book: Path | None = typer.Option(None, "--book", help="Translate only this EPUB file"),
     limit: int | None = typer.Option(None, "--limit", help="Translate at most N pending segments per step"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Only run inspect + estimate; no API calls"),
@@ -355,7 +355,7 @@ def start(
         help="Stop safe mode after N consecutive batches with no new completions (0 = disabled)",
     ),
 ) -> None:
-    """Run the full translation workflow for EPUBs in books/."""
+    """Run the full translation workflow for EPUBs in input/."""
     load_dotenv(encoding="utf-8-sig")
     from .checkpoint import CheckpointManager
     from .estimate import run_estimate
@@ -369,6 +369,17 @@ def start(
         run_validate,
     )
 
+    # Auto-create the books directory when it does not exist and no explicit
+    # --book path was given. Show a friendly message instead of an error.
+    if not books_dir.exists() and book is None:
+        books_dir.mkdir(parents=True, exist_ok=True)
+        typer.echo(
+            f"已建立 {books_dir}/ 資料夾。請把 .epub 檔案放入後重新執行。\n"
+            f"  Folder created: {books_dir}/\n"
+            f"  Drop your .epub files there, then run again.",
+        )
+        raise typer.Exit(0)
+
     try:
         books = _collect_start_books(books_dir, book)
     except Exception as exc:
@@ -376,7 +387,11 @@ def start(
         raise typer.Exit(1)
 
     if not books:
-        typer.echo(f"No EPUB files found in {books_dir}. Put .epub files there or pass --book.", err=True)
+        typer.echo(
+            f"No EPUB files found in {books_dir}/.\n"
+            f"  Drop .epub files there, or use --book <path>, or --books-dir <dir>.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     cfg_base = _load_config_or_exit(config, require_api_key=not dry_run)

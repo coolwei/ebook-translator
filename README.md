@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-1. Put one or more EPUB files into `books/`.
+1. Put one or more EPUB files into `input/` (created automatically on first run).
 2. Copy and edit the local config:
 
 ```bash
@@ -39,14 +39,14 @@ ebook-translator start --limit 10
 ebook-translator start --yes
 ```
 
-`ebook-translator start` reads `config.yaml` and `books/*.epub` by default. For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. It stops any book whose segment count exceeds `--max-segments` (default `300`) unless you raise the limit.
+`ebook-translator start` reads `config.yaml` and scans `input/*.epub` by default (no `input.path` needed in config). For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. It stops any book whose segment count exceeds `--max-segments` (default `300`) unless you raise the limit.
 
 ### Large-book safe mode
 
 For long books or providers that frequently return 429 / empty content / `quality_failed`, use batched translation with cooldown and an optional rate-limit circuit breaker:
 
 ```powershell
-python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
+python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
 ```
 
 | 參數 | 說明 |
@@ -69,7 +69,7 @@ python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --bat
 預覽批次計畫：
 
 ```powershell
-python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --dry-run
+python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --dry-run
 ```
 
 ### Provider fallback（大書建議）
@@ -107,7 +107,7 @@ provider:
 ```
 
 ```powershell
-python -m ebook_translator start --book books\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
+python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
 ```
 
 ### Translation log

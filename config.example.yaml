@@ -3,8 +3,10 @@ project:
   output_dir: outputs
   jobs_dir: jobs
 
-input:
-  path: books/example.epub
+# 書籍輸入：把 .epub 放入 input/ 資料夾，無需在 config.yaml 指定路徑。
+# 若要強制指定單一書籍，可取消下方註解：
+# input:
+#   path: input/example.epub
 
 translation:
   source_language: auto
