@@ -145,7 +145,7 @@ cli:
 翻譯估算（未呼叫 API）
 ============================================================
 書籍標題                    : My Book
-輸入路徑                    : books/my-book.epub
+輸入路徑                    : input/my-book.epub
 章節數                      : 10
 段落數                      : 150
 原文字元數                  : 45000
@@ -161,7 +161,7 @@ cli:
 translation_estimate_title
 ============================================================
 book_title                 : My Book
-input_path                 : books/my-book.epub
+input_path                 : input/my-book.epub
 chapter_count              : 10
 segment_count              : 150
 report_saved_to outputs/my-book/estimate_report.json
@@ -551,7 +551,7 @@ pytest tests/ -v
 ## 安全性
 
 - 不要 commit 真實 API key
-- `config.yaml`、`.env`、`books/`、`outputs/` 已加入 `.gitignore`
+- `config.yaml`、`.env`、`input/`、`books/`、`outputs/` 已加入 `.gitignore`
 - API key 只從環境變數讀取
 
 ## Windows 一鍵啟動
