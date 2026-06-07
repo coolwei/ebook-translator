@@ -213,6 +213,57 @@ def test_detect_simplified_chinese_matches_include_all_occurrences():
     assert len(issue.matches) == 3  # two 这 + one 国
 
 
+# False-positive regression tests: chars identical in Simplified and Traditional
+# must NOT trigger the simplified_chinese check.
+
+def test_detect_simplified_chinese_qin_not_flagged():
+    """勤 is the same codepoint in both scripts — must not be flagged."""
+    seg = make_segment()
+    rec = make_record("外勤辦公室")  # 勤 should not trigger
+    assert detect_simplified_chinese(seg, rec) is None
+
+
+def test_detect_simplified_chinese_bing_not_flagged():
+    """兵 is the same codepoint in both scripts — must not be flagged."""
+    seg = make_segment()
+    rec = make_record("憲兵部隊")  # 兵 should not trigger
+    assert detect_simplified_chinese(seg, rec) is None
+
+
+def test_detect_simplified_chinese_meiguo_traditional_not_flagged():
+    """美國軍隊 uses all Traditional characters — must not be flagged."""
+    seg = make_segment()
+    rec = make_record("美國軍隊")
+    assert detect_simplified_chinese(seg, rec) is None
+
+
+def test_detect_simplified_chinese_meiguo_simplified_flagged():
+    """美国軍隊 contains Simplified 国 — must be flagged with correct match."""
+    seg = make_segment()
+    rec = make_record("美国軍隊")
+    issue = detect_simplified_chinese(seg, rec)
+    assert issue is not None
+    assert issue.check == "simplified_chinese"
+    texts = [m["text"] for m in issue.matches]
+    assert "国" in texts
+    sugs = {m["text"]: m["suggestion"] for m in issue.matches}
+    assert sugs["国"] == "國"
+
+
+def test_detect_simplified_chinese_full_simplified_flagged():
+    """这是一个测试 — all Simplified, must be flagged."""
+    seg = make_segment()
+    rec = make_record("这是一个测试")
+    assert detect_simplified_chinese(seg, rec) is not None
+
+
+def test_detect_simplified_chinese_full_traditional_not_flagged():
+    """這是一個測試 — all Traditional, must not be flagged."""
+    seg = make_segment()
+    rec = make_record("這是一個測試")
+    assert detect_simplified_chinese(seg, rec) is None
+
+
 def test_save_validation_report_includes_matches(tmp_path):
     from ebook_translator.validator import ValidationReport, ValidationIssue, save_validation_report
     issue = ValidationIssue(

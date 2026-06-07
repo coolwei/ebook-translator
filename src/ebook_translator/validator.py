@@ -231,7 +231,14 @@ _EXPLANATION_RE = re.compile(
 
 def detect_simplified_chinese(segment: Segment, record: TranslationRecord) -> ValidationIssue | None:
     text = record.translation
-    found_chars = sorted({ch for ch in text if ch in SIMPLIFIED_CHARS})
+    # Only flag characters that have a genuinely different Traditional form.
+    # Characters where SIMPLIFIED_TO_TRADITIONAL maps to themselves are the same
+    # Unicode codepoint in both scripts (e.g. 兵, 勤) and must not be flagged.
+    def _is_genuine_simplified(ch: str) -> bool:
+        trad = SIMPLIFIED_TO_TRADITIONAL.get(ch)
+        return trad is not None and trad != ch
+
+    found_chars = sorted({ch for ch in text if ch in SIMPLIFIED_CHARS and _is_genuine_simplified(ch)})
     if not found_chars:
         return None
     matches = [
@@ -241,7 +248,7 @@ def detect_simplified_chinese(segment: Segment, record: TranslationRecord) -> Va
             "suggestion": SIMPLIFIED_TO_TRADITIONAL.get(ch),
         }
         for i, ch in enumerate(text)
-        if ch in SIMPLIFIED_CHARS
+        if ch in SIMPLIFIED_CHARS and _is_genuine_simplified(ch)
     ]
     return ValidationIssue(
         segment_id=segment.segment_id,
