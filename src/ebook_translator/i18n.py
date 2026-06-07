@@ -77,6 +77,20 @@ _ZH_TW: dict[str, str] = {
     "safe_mode_stop_on_no_progress": "無進展停止門檻（批次數）",
     "safe_mode_stopped_no_progress": "已停止：連續 {count} 批無新完成段落（門檻 {threshold}）。請用 explain-quality 或 patch-segment 排查。",
 
+    # cli.py — max-segments safety limit
+    "max_segments_skip_book": "已跳過書籍：{book_path}",
+    "max_segments_skip_reason": "原因：段落數超過安全上限",
+    "max_segments_skip_segment_count": "目前段落數：{count}",
+    "max_segments_skip_limit": "目前上限：{limit}",
+    "max_segments_skip_howto": "處理方式：",
+    "max_segments_skip_raise_all": "  1. 若確認要翻譯這本書，請提高上限：",
+    "max_segments_skip_cmd": "     {cmd}",
+    "max_segments_skip_raise_book": "  2. 或指定單本：",
+    "max_segments_no_books_started": "沒有任何書籍開始翻譯。",
+    "max_segments_scanned_summary": "已掃描 {scanned} 本書，{skipped} 本因段落數超過 --max-segments 被跳過。",
+    "max_segments_all_skipped_reason": "跳過原因：段落數超過安全上限。",
+    "max_segments_suggest_translate": "若要翻譯，請執行：",
+
     # cli.py — common
     "no_segments_found": "找不到段落。請先執行翻譯。",
     "no_job_state": "找不到工作狀態。",
@@ -165,6 +179,20 @@ _EN: dict[str, str] = {
     "safe_mode_stopped_rate_limit": "Stopped: accumulated {count} rate limit error(s) (threshold {threshold})",
     "safe_mode_stop_on_no_progress": "Stop on no-progress batch count",
     "safe_mode_stopped_no_progress": "Stopped: {count} consecutive batch(es) with no new completions (threshold {threshold}). Use 'explain-quality' or 'patch-segment' to investigate.",
+
+    # cli.py — max-segments safety limit
+    "max_segments_skip_book": "Skipped book: {book_path}",
+    "max_segments_skip_reason": "Reason: segment count exceeds the safety limit",
+    "max_segments_skip_segment_count": "Segment count: {count}",
+    "max_segments_skip_limit": "Current limit: {limit}",
+    "max_segments_skip_howto": "What to do:",
+    "max_segments_skip_raise_all": "  1. To translate this book, raise the limit:",
+    "max_segments_skip_cmd": "     {cmd}",
+    "max_segments_skip_raise_book": "  2. Or target one book:",
+    "max_segments_no_books_started": "No books started translation.",
+    "max_segments_scanned_summary": "Scanned {scanned} book(s); {skipped} skipped because segment count exceeds --max-segments.",
+    "max_segments_all_skipped_reason": "Skip reason: segment count exceeds the safety limit.",
+    "max_segments_suggest_translate": "To translate, run:",
 
     # cli.py — common
     "no_segments_found": "No segments found. Run translate first.",

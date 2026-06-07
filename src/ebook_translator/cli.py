@@ -14,6 +14,8 @@ app = typer.Typer(
     add_completion=False,
 )
 
+DEFAULT_MAX_SEGMENTS = 3000
+
 
 def _load_config_or_exit(config: Path, *, require_api_key: bool = True):
     from .config import load_config
@@ -68,6 +70,63 @@ def _quality_failed_ids(job_dir: Path, cfg) -> set[str]:
         if seg.segment_id in translations
     ]
     return quality_failed_segment_ids(pairs, cfg.quality)
+
+
+def _suggested_max_segments(segment_count: int) -> int:
+    return max(segment_count, DEFAULT_MAX_SEGMENTS)
+
+
+def _print_max_segments_skip(
+    *,
+    lang: str,
+    epub_path: Path,
+    segment_count: int,
+    max_segments: int,
+) -> None:
+    from .i18n import t
+
+    suggested = _suggested_max_segments(segment_count)
+    book_arg = str(epub_path)
+    cmd_all = (
+        f"python -m ebook_translator start --max-segments {suggested} --yes"
+    )
+    cmd_book = (
+        f'python -m ebook_translator start --book "{book_arg}" '
+        f"--max-segments {suggested} --yes"
+    )
+    separator = "=" * 60
+    typer.echo(separator, err=True)
+    typer.echo(t("max_segments_skip_book", lang, book_path=book_arg), err=True)
+    typer.echo(t("max_segments_skip_reason", lang), err=True)
+    typer.echo(t("max_segments_skip_segment_count", lang, count=segment_count), err=True)
+    typer.echo(t("max_segments_skip_limit", lang, limit=max_segments), err=True)
+    typer.echo(t("max_segments_skip_howto", lang), err=True)
+    typer.echo(t("max_segments_skip_raise_all", lang), err=True)
+    typer.echo(t("max_segments_skip_cmd", lang, cmd=cmd_all), err=True)
+    typer.echo(t("max_segments_skip_raise_book", lang), err=True)
+    typer.echo(t("max_segments_skip_cmd", lang, cmd=cmd_book), err=True)
+    typer.echo(separator, err=True)
+
+
+def _print_max_segments_all_skipped_summary(
+    *,
+    lang: str,
+    scanned_count: int,
+    skipped_count: int,
+    max_segments: int,
+) -> None:
+    from .i18n import t
+
+    suggested = max(max_segments, DEFAULT_MAX_SEGMENTS)
+    cmd = f"python -m ebook_translator start --max-segments {suggested} --yes"
+    typer.echo(t("max_segments_no_books_started", lang), err=True)
+    typer.echo(
+        t("max_segments_scanned_summary", lang, scanned=scanned_count, skipped=skipped_count),
+        err=True,
+    )
+    typer.echo(t("max_segments_all_skipped_reason", lang), err=True)
+    typer.echo(t("max_segments_suggest_translate", lang), err=True)
+    typer.echo(cmd, err=True)
 
 
 def _print_safe_mode_plan(
@@ -332,7 +391,15 @@ def start(
     limit: int | None = typer.Option(None, "--limit", help="Translate at most N pending segments per step"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Only run inspect + estimate; no API calls"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation and start translating"),
-    max_segments: int = typer.Option(300, "--max-segments", help="Stop a book if segment count exceeds this"),
+    max_segments: int = typer.Option(
+        DEFAULT_MAX_SEGMENTS,
+        "--max-segments",
+        help=(
+            "Safety limit: skip books whose segment count exceeds this "
+            f"(default: {DEFAULT_MAX_SEGMENTS}). "
+            "Use --limit to cap how many segments are translated in this run."
+        ),
+    ),
     skip_confirm: bool = typer.Option(False, "--skip-confirm", help="Alias for --yes"),
     batch_size: int | None = typer.Option(
         None,
@@ -397,6 +464,8 @@ def start(
     cfg_base = _load_config_or_exit(config, require_api_key=not dry_run)
     auto_yes = yes or skip_confirm
     lang = get_cli_language(cfg_base)
+    started_count = 0
+    skipped_max_segments_count = 0
 
     for epub_path in books:
         cfg = cfg_base.model_copy(deep=True)
@@ -413,12 +482,16 @@ def start(
         job_dir = cfg.project.output_dir / book_name
 
         if segment_count > max_segments:
-            typer.echo(
-                f"{t('skipping', lang)} {epub_path}: segment count {segment_count} exceeds --max-segments {max_segments}.",
-                err=True,
+            skipped_max_segments_count += 1
+            _print_max_segments_skip(
+                lang=lang,
+                epub_path=epub_path,
+                segment_count=segment_count,
+                max_segments=max_segments,
             )
             continue
 
+        started_count += 1
         effective_segments = compute_effective_segments(segment_count, max_segments, limit)
         safe_mode = batch_size is not None and batch_size > 0
 
@@ -479,6 +552,14 @@ def start(
             run_validate(job_dir, cfg)
             run_report_missing(job_dir, cfg.input.path, cfg)
             run_export(job_dir, cfg)
+
+    if started_count == 0 and skipped_max_segments_count == len(books):
+        _print_max_segments_all_skipped_summary(
+            lang=lang,
+            scanned_count=len(books),
+            skipped_count=skipped_max_segments_count,
+            max_segments=max_segments,
+        )
 
 
 @app.command()

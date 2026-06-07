@@ -36,23 +36,23 @@ ebook-translator start --limit 10
 6. When the estimate and trial output look right, run the full guarded workflow:
 
 ```bash
-ebook-translator start --yes
+python -m ebook_translator start --yes
 ```
 
-`ebook-translator start` reads `config.yaml` and scans `input/*.epub` by default (no `input.path` needed in config). For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. It stops any book whose segment count exceeds `--max-segments` (default `300`) unless you raise the limit.
+`ebook-translator start` reads `config.yaml` and scans `input/*.epub` by default (no `input.path` needed in config). For each book it runs inspect, estimate, translate, retry-failed, retry-quality-failed, validate, report-missing, and export. `--max-segments` (default `3000`) is a **safety check** to avoid accidentally running very large books; it is not the per-run translation cap. Use `--limit` for small trial runs.
 
 ### Large-book safe mode
 
 For long books or providers that frequently return 429 / empty content / `quality_failed`, use batched translation with cooldown and an optional rate-limit circuit breaker:
 
 ```powershell
-python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
+python -m ebook_translator start --max-segments 3000 --batch-size 100 --cooldown-seconds 30 --yes
 ```
 
 | 參數 | 說明 |
 |---|---|
-| `--max-segments N` | 本次處理範圍上限，避免超大書誤跑 |
-| `--limit N` | 本次實際最多翻譯 N 段，適合測試 |
+| `--max-segments N` | 安全檢查：段落數超過 N 的書籍會被跳過（預設 3000），避免誤跑超大書 |
+| `--limit N` | 本次實際最多翻譯 N 段，適合小批測試 |
 | `--batch-size N` | 每批最多處理 N 個未完成 segment |
 | `--cooldown-seconds N` | 每批完成後等待 N 秒（`--dry-run` 不會 sleep） |
 | `--stop-on-rate-limit-count N` | 累積 N 次 rate limit 類錯誤後安全停止（0 = 關閉） |
@@ -69,7 +69,7 @@ python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --bat
 預覽批次計畫：
 
 ```powershell
-python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --dry-run
+python -m ebook_translator start --max-segments 3000 --batch-size 100 --cooldown-seconds 30 --dry-run
 ```
 
 ### Provider fallback（大書建議）
@@ -107,7 +107,7 @@ provider:
 ```
 
 ```powershell
-python -m ebook_translator start --book input\Spy.epub --max-segments 2500 --batch-size 100 --cooldown-seconds 60 --yes
+python -m ebook_translator start --max-segments 3000 --batch-size 100 --cooldown-seconds 30 --yes
 ```
 
 ### Translation log

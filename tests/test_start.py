@@ -112,13 +112,37 @@ def test_start_no_epub_shows_clear_message(tmp_path):
     assert "No EPUB files found" in result.output
 
 
+def _estimate_report(segment_count: int, book_name: str = "test-book") -> dict:
+    return {
+        "book": {"book_name": book_name},
+        "segments": {"count": segment_count},
+        "tokens": {"estimated_total_tokens": 1000},
+        "requests": {"estimated_requests_with_retry": 10},
+        "runtime": {"minimum_minutes_with_retry": 5},
+    }
+
+
+def test_start_help_shows_max_segments_default_and_limit_hint():
+    result = runner.invoke(app, ["start", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "3000" in result.output
+    assert "--limit" in result.output
+    assert "Safety limit" in result.output or "safety" in result.output.lower()
+
+
 def test_start_stops_when_segment_count_exceeds_max_segments(tmp_path):
     books_dir, book_path = _make_books_dir(tmp_path)
     cfg = _write_config(tmp_path, book_path)
 
-    with patch(
-        "ebook_translator.translator.OpenAICompatibleProvider",
-        side_effect=AssertionError("provider should not be instantiated"),
+    with (
+        patch(
+            "ebook_translator.translator.OpenAICompatibleProvider",
+            side_effect=AssertionError("provider should not be instantiated"),
+        ),
+        patch(
+            "ebook_translator.estimate.run_estimate",
+            return_value=_estimate_report(2247),
+        ),
     ):
         result = runner.invoke(
             app,
@@ -130,14 +154,119 @@ def test_start_stops_when_segment_count_exceeds_max_segments(tmp_path):
                 str(books_dir),
                 "--yes",
                 "--max-segments",
+                "300",
+            ],
+            env={"FAKE_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "已跳過書籍" in result.output or "Skipped book" in result.output
+    assert "2247" in result.output
+    assert "300" in result.output
+    assert "--max-segments 3000" in result.output
+    assert "沒有任何書籍開始翻譯" in result.output or "No books started translation" in result.output
+    assert not (_book_dir(tmp_path) / "translations.jsonl").exists()
+
+
+def test_start_dry_run_shows_max_segments_skip_message(tmp_path):
+    books_dir, book_path = _make_books_dir(tmp_path)
+    cfg = _write_config(tmp_path, book_path)
+
+    with (
+        patch(
+            "ebook_translator.translator.OpenAICompatibleProvider",
+            side_effect=AssertionError("provider should not be instantiated"),
+        ),
+        patch(
+            "ebook_translator.estimate.run_estimate",
+            return_value=_estimate_report(2247),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "start",
+                "--config",
+                str(cfg),
+                "--books-dir",
+                str(books_dir),
+                "--dry-run",
+                "--max-segments",
+                "300",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "2247" in result.output
+    assert "段落數超過安全上限" in result.output or "safety limit" in result.output.lower()
+    assert "Dry run complete" not in result.output
+
+
+def test_start_default_max_segments_allows_2247_segments(tmp_path):
+    books_dir, book_path = _make_books_dir(tmp_path)
+    cfg = _write_config(tmp_path, book_path)
+    provider = MockTranslationProvider()
+
+    with (
+        patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=provider),
+        patch(
+            "ebook_translator.estimate.run_estimate",
+            return_value=_estimate_report(2247),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "start",
+                "--config",
+                str(cfg),
+                "--books-dir",
+                str(books_dir),
+                "--yes",
+                "--limit",
                 "1",
             ],
             env={"FAKE_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
-    assert "exceeds --max-segments" in result.output
-    assert not (_book_dir(tmp_path) / "translations.jsonl").exists()
+    assert "已跳過書籍" not in result.output
+    assert "Skipped book" not in result.output
+    assert provider.call_count == 1
+
+
+def test_start_limit_and_max_segments_are_distinct(tmp_path):
+    books_dir, book_path = _make_books_dir(tmp_path)
+    cfg = _write_config(tmp_path, book_path)
+    provider = MockTranslationProvider()
+
+    with (
+        patch("ebook_translator.translator.OpenAICompatibleProvider", return_value=provider),
+        patch(
+            "ebook_translator.estimate.run_estimate",
+            return_value=_estimate_report(100),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "start",
+                "--config",
+                str(cfg),
+                "--books-dir",
+                str(books_dir),
+                "--yes",
+                "--max-segments",
+                "3000",
+                "--limit",
+                "2",
+            ],
+            env={"FAKE_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert provider.call_count == 2
+    assert "已跳過書籍" not in result.output
 
 
 def test_start_limit_translates_only_n_segments_and_writes_outputs(tmp_path):
