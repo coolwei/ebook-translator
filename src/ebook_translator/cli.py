@@ -756,6 +756,129 @@ def repair_jsonl(
         )
 
 
+@app.command(name="refresh-quality-status")
+def refresh_quality_status(
+    output_dir: Path = typer.Argument(..., help="Path to job output directory"),
+    segment_id: str | None = typer.Argument(
+        None, help="Segment ID to refresh (omit when using --all-quality-failed)"
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Optional config file for quality settings"
+    ),
+    all_quality_failed: bool = typer.Option(
+        False, "--all-quality-failed", help="Refresh all quality_failed segments"
+    ),
+) -> None:
+    """Re-run quality checks on stored translations without any API calls.
+
+    If the current quality gate now passes (e.g. after a false-positive fix), a
+    new 'completed' record is appended to translations.jsonl.  The original
+    quality_failed record is never modified (append-only).
+
+    Use a single SEGMENT_ID to check one segment, or --all-quality-failed to
+    process every segment whose latest record has status quality_failed.
+    """
+    from datetime import datetime, timezone
+
+    from .checkpoint import CheckpointManager
+    from .config import QualityConfig
+    from .models import TranslationRecord
+    from .validator import check_quality
+
+    if not output_dir.is_dir():
+        typer.echo(f"Directory not found: {output_dir}", err=True)
+        raise typer.Exit(1)
+
+    if segment_id is None and not all_quality_failed:
+        typer.echo(
+            "Provide a SEGMENT_ID argument or pass --all-quality-failed.", err=True
+        )
+        raise typer.Exit(1)
+
+    # Load quality config (falls back to defaults if no config given / load fails).
+    quality_cfg: QualityConfig
+    if config is not None:
+        try:
+            cfg_obj = _load_config_or_exit(config, require_api_key=False)
+            quality_cfg = cfg_obj.quality
+        except Exception:
+            quality_cfg = QualityConfig()
+    else:
+        quality_cfg = QualityConfig()
+
+    checkpoint = CheckpointManager(output_dir)
+    segments_list = checkpoint.load_segments()
+    all_translations = checkpoint.load_all_translations()
+
+    seg_by_id = {s.segment_id: s for s in segments_list}
+
+    def _refresh_one(sid: str) -> bool:
+        """Re-check quality for one segment.  Returns True if repaired."""
+        seg = seg_by_id.get(sid)
+        if seg is None:
+            typer.echo(f"  {sid}: segment not found in segments.jsonl", err=True)
+            return False
+        record = all_translations.get(sid)
+        if record is None:
+            typer.echo(f"  {sid}: no translation record found", err=True)
+            return False
+        if record.status == "completed":
+            typer.echo(f"  {sid}: already completed — no action needed")
+            return False
+        if record.status == "failed":
+            typer.echo(
+                f"  {sid}: hard failure (use retry-failed to re-translate) — no action"
+            )
+            return False
+
+        # status == "quality_failed"
+        issues = check_quality(seg, record.translation, quality_cfg)
+        if not issues:
+            new_record = TranslationRecord(
+                segment_id=seg.segment_id,
+                source_hash=seg.sha1_prefix,
+                status="completed",
+                source=seg.source_html,
+                translation=record.translation,
+                model=record.model,
+                attempt=record.attempt + 1,
+                error=None,
+                repaired_from_status=record.status,
+                repair_reason="quality_recheck_passed",
+                created_at=datetime.now(timezone.utc),
+            )
+            checkpoint.append_translation(new_record)
+            typer.echo(
+                f"  ✓ {sid}: repaired → completed (attempt {new_record.attempt})"
+            )
+            return True
+        else:
+            checks_str = "; ".join(i.check for i in issues)
+            typer.echo(f"  ✗ {sid}: still failing — {checks_str}")
+            for issue in issues:
+                if issue.matches:
+                    for m in issue.matches:
+                        sug = m.get("suggestion")
+                        typer.echo(
+                            f"      text={m['text']!r}  pos={m['position']}  suggestion={sug!r}"
+                        )
+            return False
+
+    if segment_id is not None:
+        _refresh_one(segment_id)
+    else:
+        qf_ids = checkpoint.load_quality_failed_ids()
+        if not qf_ids:
+            typer.echo("No quality_failed segments found.")
+            return
+        typer.echo(f"Refreshing {len(qf_ids)} quality_failed segment(s)...")
+        repaired = 0
+        for sid in sorted(qf_ids):
+            if _refresh_one(sid):
+                repaired += 1
+        typer.echo(f"Done: {repaired}/{len(qf_ids)} repaired → completed.")
+
+
 @app.command(name="report-missing")
 def report_missing(
     job: Path = typer.Argument(..., help="Path to job output directory (contains state.json / segments.jsonl)"),

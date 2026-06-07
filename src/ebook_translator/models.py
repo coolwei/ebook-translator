@@ -33,6 +33,9 @@ class TranslationRecord(BaseModel):
     fallback_attempt: int | None = None
     # Structured match details from quality checks (e.g. simplified_chinese positions).
     quality_matches: list | None = None
+    # Set when this record was created by refresh-quality-status (no API call).
+    repaired_from_status: str | None = None
+    repair_reason: str | None = None
     created_at: datetime
 
 
