@@ -783,7 +783,7 @@ def refresh_quality_status(
     from .checkpoint import CheckpointManager
     from .config import QualityConfig
     from .models import TranslationRecord
-    from .validator import check_quality
+    from .validator import evaluate_quality_gate
 
     if not output_dir.is_dir():
         typer.echo(f"Directory not found: {output_dir}", err=True)
@@ -831,9 +831,12 @@ def refresh_quality_status(
             )
             return False
 
-        # status == "quality_failed"
-        issues = check_quality(seg, record.translation, quality_cfg)
-        if not issues:
+        # status == "quality_failed" — use the full severity-aware gate so that
+        # warning-only issues (e.g. a single simplified-Chinese char) no longer
+        # block repair when strict_mode is False.
+        gate = evaluate_quality_gate(seg, record.translation, quality_cfg)
+        if not gate.has_errors:
+            warn_checks = [i.check for i in gate.warnings]
             new_record = TranslationRecord(
                 segment_id=seg.segment_id,
                 source_hash=seg.sha1_prefix,
@@ -843,19 +846,21 @@ def refresh_quality_status(
                 model=record.model,
                 attempt=record.attempt + 1,
                 error=None,
+                quality_warnings=warn_checks or None,
                 repaired_from_status=record.status,
                 repair_reason="quality_recheck_passed",
                 created_at=datetime.now(timezone.utc),
             )
             checkpoint.append_translation(new_record)
+            warn_note = f" (warnings: {', '.join(warn_checks)})" if warn_checks else ""
             typer.echo(
-                f"  ✓ {sid}: repaired → completed (attempt {new_record.attempt})"
+                f"  ✓ {sid}: repaired → completed (attempt {new_record.attempt}){warn_note}"
             )
             return True
         else:
-            checks_str = "; ".join(i.check for i in issues)
+            checks_str = "; ".join(i.check for i in gate.errors)
             typer.echo(f"  ✗ {sid}: still failing — {checks_str}")
-            for issue in issues:
+            for issue in gate.errors:
                 if issue.matches:
                     for m in issue.matches:
                         sug = m.get("suggestion")

@@ -102,10 +102,11 @@ def test_refresh_repairs_false_positive(tmp_path):
 
 
 def test_refresh_no_repair_when_still_failing(tmp_path):
-    """A genuinely simplified record must not be upgraded to completed."""
-    # 美国 contains 国 → 國, which IS a genuine simplified char.
+    """A translation with many simplified chars (above threshold) must not be upgraded."""
+    # 国国国国 has 4 detected simplified chars (> max_error_chars=3) → hard fail
+    # even in relaxed mode (strict_mode=False).
     seg = _seg("0000:0000:aa")
-    rec = _qf_record("0000:0000:aa", "美国軍隊")
+    rec = _qf_record("0000:0000:aa", "国国国国的翻译")
     job_dir = _setup_job(tmp_path, [seg], [rec])
 
     result = runner.invoke(app, ["refresh-quality-status", str(job_dir), "0000:0000:aa"])
@@ -118,10 +119,30 @@ def test_refresh_no_repair_when_still_failing(tmp_path):
     assert latest.status == "quality_failed", "Must not be upgraded"
 
 
-def test_refresh_still_failing_shows_match_details(tmp_path):
-    """When still failing, match details (char, position, suggestion) should be shown."""
+def test_refresh_below_threshold_simplified_repaired_with_warning(tmp_path):
+    """A translation with ≤ max_error_chars simplified chars is a warning → repaired."""
+    # 美国 contains 1 simplified char (国→國); 1 ≤ max_error_chars=3 → warning → repair.
     seg = _seg("0000:0000:aa")
-    rec = _qf_record("0000:0000:aa", "美国軍隊")  # 国 at position 1
+    rec = _qf_record("0000:0000:aa", "美国軍隊")
+    job_dir = _setup_job(tmp_path, [seg], [rec])
+
+    result = runner.invoke(app, ["refresh-quality-status", str(job_dir), "0000:0000:aa"])
+
+    assert result.exit_code == 0, result.output
+    assert "repaired" in result.output
+    assert "warnings: simplified_chinese" in result.output
+
+    checkpoint = CheckpointManager(job_dir)
+    latest = checkpoint.load_all_translations()["0000:0000:aa"]
+    assert latest.status == "completed"
+    assert latest.quality_warnings == ["simplified_chinese"]
+
+
+def test_refresh_still_failing_shows_match_details(tmp_path):
+    """When still failing (above threshold), match details (char, position, suggestion) shown."""
+    seg = _seg("0000:0000:aa")
+    # 国国国国 → 4 matches > max_error_chars=3 → hard fail → match details displayed
+    rec = _qf_record("0000:0000:aa", "国国国国的翻译")
     job_dir = _setup_job(tmp_path, [seg], [rec])
 
     result = runner.invoke(app, ["refresh-quality-status", str(job_dir), "0000:0000:aa"])
@@ -182,16 +203,16 @@ def test_refresh_already_completed_no_action(tmp_path):
 
 
 def test_refresh_all_quality_failed_batch(tmp_path):
-    """--all-quality-failed repairs false positives and leaves genuine failures alone."""
+    """--all-quality-failed repairs below-threshold and leaves above-threshold failures alone."""
     segs = [
         _seg("0000:0000:aa"),
         _seg("0000:0001:bb"),
         _seg("0000:0002:cc"),
     ]
     recs = [
-        _qf_record("0000:0000:aa", "外勤辦公室"),  # 勤 is same-form → false positive → repair
-        _qf_record("0000:0001:bb", "憲兵部隊"),    # 兵 is same-form → false positive → repair
-        _qf_record("0000:0002:cc", "美国軍隊"),    # 国→國, genuine → no repair
+        _qf_record("0000:0000:aa", "外勤辦公室"),    # 勤 is same-form → no issue → repair
+        _qf_record("0000:0001:bb", "憲兵部隊"),      # 兵 is same-form → no issue → repair
+        _qf_record("0000:0002:cc", "国国国国的翻译"),    # 4 matches > max_error_chars=3 → above threshold → no repair
     ]
     job_dir = _setup_job(tmp_path, segs, recs)
 
